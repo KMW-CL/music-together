@@ -36,7 +36,7 @@ test('room creation, shared controls, and late join state', async () => {
   assert.equal(invalid.status, 400);
 
   const loaded = await control({ type: 'load', videoId: 'dQw4w9WgXcQ' });
-  assert.equal(loaded.body.playing, false);
+  assert.equal(loaded.body.playing, true, '첫 곡을 추가하면 방이 바로 재생 상태가 된다');
   assert.equal(loaded.body.videoId, 'dQw4w9WgXcQ');
   const playing = await control({ type: 'play', position: 42 });
   assert.equal(playing.body.playing, true);
@@ -208,7 +208,7 @@ test('playlist order, selection, looping, and disk persistence', async () => {
     result = await call(`/api/rooms/${id}`);
     assert.equal(result.body.current.title, '셋째 곡');
     assert.deepEqual(result.body.playlist.map((item) => item.title), ['첫 곡', '셋째 곡', '다음 곡']);
-    assert.equal(result.body.playing, false);
+    assert.equal(result.body.playing, true, '서버를 다시 켜도 저장된 방은 재생을 재개한다');
     assert.equal(result.body.repeat, false);
     assert.equal(result.body.shuffle, true);
     const afterRestart = new Set();
@@ -216,6 +216,10 @@ test('playlist order, selection, looping, and disk persistence', async () => {
     afterRestart.add((await control('next')).body.current.title);
     assert.deepEqual(afterRestart, new Set(['첫 곡', '다음 곡']));
     assert.equal((await control('next')).body.playing, false);
+    await new Promise((resolve) => localServer.close(resolve));
+    localServer = createAppServer({ storagePath, youtubeApiKey: '' });
+    origin = await listen();
+    assert.equal((await call(`/api/rooms/${id}`)).body.playing, false, '반복을 끄고 목록이 끝난 방은 다시 켜지지 않는다');
   } finally {
     if (localServer.listening) await new Promise((resolve) => localServer.close(resolve));
     assert.ok(path.resolve(directory).startsWith(`${path.resolve(tmpdir())}${path.sep}`));
@@ -453,12 +457,12 @@ test('legacy rooms migrate current, queue, and history into one playlist', async
     assert.equal(room.current.title, '첫 곡');
     assert.equal(room.currentId, 'oldest-track');
     assert.deepEqual(room.playlist.map((track) => track.title), ['첫 곡', '둘째 곡']);
-    assert.equal(room.playing, false);
+    assert.equal(room.playing, true);
     const replayResponse = await fetch(`http://127.0.0.1:${restoredServer.address().port}/api/rooms/5678abcd`);
     const replayRoom = await replayResponse.json();
     assert.deepEqual(replayRoom.playlist.map((track) => track.title), ['첫 곡', '둘째 곡', '다음 곡']);
     assert.equal(replayRoom.currentId, 'newest-track');
-    assert.equal(replayRoom.playing, false);
+    assert.equal(replayRoom.playing, true);
   } finally {
     if (restoredServer.listening) await new Promise((resolve) => restoredServer.close(resolve));
     assert.ok(path.resolve(directory).startsWith(`${path.resolve(tmpdir())}${path.sep}`));

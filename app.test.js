@@ -78,6 +78,7 @@ test('the next song uses the activated YouTube player while the tab is hidden', 
   context.applyState(room('first', 'AAAAAAAAAAA', 1));
   assert.equal(players.length, 1);
   players[0].ready();
+  assert.equal(players[0].getPlayerState(), playerStates.PLAYING, '입장하면 재생을 자동으로 시도한다');
   elements.get('volumeControl').value = '35';
   elements.get('volumeControl').listeners.input();
   assert.equal(players[0].volume, 35);
@@ -90,7 +91,11 @@ test('the next song uses the activated YouTube player while the tab is hidden', 
   assert.equal(players[0].muted, false);
   assert.equal(players[0].volume, 35);
   assert.equal(savedSettings.get('music-together-volume-before-mute'), '35');
+  players[0].playerState = playerStates.CUED;
+  players[0].options.events.onAutoplayBlocked({ target: players[0] });
+  assert.equal(vm.runInContext('autoplayBlocked', context), true);
   elements.get('joinPlayButton').listeners.click();
+  assert.equal(players[0].getPlayerState(), playerStates.PLAYING, '자동 재생 차단 시 사용자가 소리를 켤 수 있다');
 
   context.applyState(room('second', 'BBBBBBBBBBB', 2));
   assert.equal(players.length, 1);

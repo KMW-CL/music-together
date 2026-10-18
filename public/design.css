@@ -128,13 +128,7 @@ a:hover { color: var(--primary); text-decoration: underline; text-underline-offs
 .join-play { background: var(--highlight); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
 .join-play:hover { background: #333333; }
 .join-play small { color: var(--muted); font-size: 12px; }
-.play-triangle, .play-button { background: var(--primary); color: var(--black); }
-.play-button { padding: 0; }
-.play-button #playIcon { display: block; width: 26px; height: 26px; color: var(--black); }
-.play-button .pause-glyph, .play-button #playIcon.is-playing .play-glyph { display: none; }
-.play-button #playIcon.is-playing .pause-glyph { display: block; }
-.play-button:hover:not(:disabled) { background: var(--primary-hover); transform: scale(1.04); }
-.play-button:active:not(:disabled) { background: var(--primary-active); transform: scale(1); }
+.play-triangle { background: var(--primary); color: var(--black); }
 .next-button { width: 48px; height: 48px; border: 1px solid var(--border); background: var(--highlight); color: var(--text); }
 .next-button:hover:not(:disabled) { border-color: var(--text); background: #333333; }
 .player-alert { background: var(--highlight); border: 1px solid var(--negative); border-radius: 6px; color: var(--text); }
@@ -197,6 +191,8 @@ a:hover { color: var(--primary); text-decoration: underline; text-underline-offs
 .playlist-item.is-current .playlist-track-details span { color: var(--primary); }
 .track-drag-handle { width: 44px; height: 44px; border: 1px solid var(--border); border-radius: 9999px; background: var(--elevated); color: var(--muted); font-size: 24px; }
 .track-drag-handle:hover:not(:disabled), .track-drag-handle:focus-visible { background: #333333; border-color: var(--text); color: var(--text); outline: 3px solid var(--focus); outline-offset: 2px; }
+.track-number { flex: none; width: 28px; color: var(--muted); font-family: var(--font-accent); font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 600; text-align: center; }
+.playlist-item.is-current .track-number { color: var(--primary); }
 .playlist-item.drop-before::before, .playlist-item.drop-after::after { background: var(--primary); box-shadow: none; }
 .track-thumbnail { width: 64px; height: 48px; background: var(--border); border-radius: 4px; }
 .playlist-track-details { gap: 4px; }
@@ -271,9 +267,9 @@ footer span { color: var(--text); }
   .outline-button { padding: 8px 12px; font-size: 12px; }
   .panel-header-actions { gap: 8px; }
   .panel-header-actions button { padding: 8px 12px; }
-  .playlist-item { grid-template-columns: 44px 56px minmax(0, 1fr); gap: 8px; padding: 8px; }
+  .playlist-item { grid-template-columns: 44px 28px 56px minmax(0, 1fr); gap: 8px; padding: 8px; }
   .track-thumbnail { width: 56px; height: 44px; }
-  .playlist-item .list-actions { grid-column: 3; gap: 8px; }
+  .playlist-item .list-actions { grid-column: 4; gap: 8px; }
   .list-action { min-height: 44px; min-width: 44px; padding: 8px 10px; }
   .search-dialog { padding: 16px; }
   .search-dialog-heading h2 { font-size: 20px; }

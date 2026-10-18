@@ -18,7 +18,7 @@ const ui = {
   youtubeLink: $('youtubeLink'), seek: $('seekBar'), currentTime: $('currentTime'), duration: $('duration'),
   volume: $('volumeControl'), volumeValue: $('volumeValue'), muteButton: $('volumeMuteButton'),
   volumeWaves: $('volumeWaves'), volumeMuteSlash: $('volumeMuteSlash'),
-  toggle: $('togglePlaybackButton'), next: $('nextTrackButton'), playIcon: $('playIcon'),
+  next: $('nextTrackButton'),
   playbackLabel: $('playbackLabel'), playlistList: $('playlistList'), playlistCount: $('playlistCount'),
   repeatButton: $('repeatButton'), repeatOneButton: $('repeatOneButton'), shuffleButton: $('shuffleButton'),
   playlistEmpty: $('playlistEmpty'), toast: $('toast'),
@@ -33,7 +33,8 @@ let events = null;
 let player = null;
 let playerReady = false;
 let playerError = null;
-let userActivated = false;
+let autoplayBlocked = false;
+let autoplayAttempted = false;
 let playerInitialized = false;
 let playerTrackId = null;
 let playerEpoch = null;
@@ -373,7 +374,8 @@ function leaveRoom() {
   hostToken = null;
   isHost = false;
   stateReceivedAt = 0;
-  userActivated = false;
+  autoplayBlocked = false;
+  autoplayAttempted = false;
   failedVideoIds.clear();
   ui.searchQuery.value = '';
   resetSearchResults();
@@ -407,17 +409,14 @@ function render() {
   ui.videoTitle.disabled = !editable;
   ui.addTrack.disabled = !editable || addingTrack;
   for (const button of ui.searchResults.querySelectorAll?.('button') || []) button.disabled = !editable;
-  ui.toggle.disabled = !hasVideo || !playerReady || Boolean(playerError);
   ui.next.disabled = !hasVideo || !state.playlist?.length;
   ui.seek.disabled = !hasVideo || !playerReady || Boolean(playerError);
-  ui.playIcon.classList.toggle('is-playing', state.playing);
-  ui.toggle.setAttribute('aria-label', state.playing ? '일시정지' : '재생');
-  ui.playbackLabel.textContent = playerError ? '이 영상은 방 안에서 재생할 수 없어요' : !hasVideo ? '곡을 추가하면 시작할 수 있어요' : (state.playing ? '모두 함께 재생 중' : '재생 버튼을 눌러 시작하세요');
+  ui.playbackLabel.textContent = playerError ? '이 영상은 방 안에서 재생할 수 없어요' : !hasVideo ? '곡을 추가하면 자동으로 재생돼요' : (state.playing ? '모두 함께 재생 중' : '재생이 끝났어요');
   ui.trackTitle.textContent = hasVideo ? (state.current?.titleSource === 'fallback' && videoData?.video_id === state.videoId ? videoData.title || state.current.title : state.current?.title || '유튜브 영상') : '첫 곡을 기다리는 중';
-  ui.trackSubtitle.textContent = playerError ? '방 안에서 재생 불가' : hasVideo ? (state.playing ? '지금 함께 듣는 중' : '재생 대기 중') : 'YouTube에서 재생됩니다';
+  ui.trackSubtitle.textContent = playerError ? '방 안에서 재생 불가' : hasVideo ? (state.playing ? '지금 함께 듣는 중' : '재생이 끝났어요') : 'YouTube에서 재생됩니다';
   ui.youtubeLink.classList.toggle('hidden', !hasVideo);
   if (hasVideo) ui.youtubeLink.href = `https://www.youtube.com/watch?v=${state.videoId}`;
-  ui.joinPlay.classList.toggle('hidden', !hasVideo || !state.playing || userActivated || Boolean(playerError));
+  ui.joinPlay.classList.toggle('hidden', !hasVideo || !state.playing || !autoplayBlocked || Boolean(playerError));
   ui.alert.classList.toggle('hidden', !playerError);
   if (playerError) {
     ui.alertTitle.textContent = playerError.title;
@@ -454,6 +453,10 @@ function trackRow(track, index, total) {
   dragHandle.setAttribute('aria-label', `${track.title} 순서 이동, ${index + 1}번째 곡`);
   dragHandle.title = '끌어서 순서 변경 · 방향키 또는 Home/End로 이동';
   dragHandle.disabled = total < 2 || !canEditPlaylist();
+  const number = document.createElement('span');
+  number.className = 'track-number';
+  number.textContent = String(index + 1).padStart(2, '0');
+  number.setAttribute('aria-hidden', 'true');
   const image = document.createElement('img');
   image.className = 'track-thumbnail';
   image.src = `https://i.ytimg.com/vi/${track.videoId}/mqdefault.jpg`;
@@ -464,13 +467,13 @@ function trackRow(track, index, total) {
   const title = document.createElement('strong');
   title.textContent = track.title;
   const subtitle = document.createElement('span');
-  subtitle.textContent = isCurrent ? (state.playing ? '● 지금 재생 중' : '● 현재 곡 · 일시정지') : 'YouTube';
+  subtitle.textContent = isCurrent ? (state.playing ? '● 지금 재생 중' : '● 현재 곡 · 재생 종료') : 'YouTube';
   details.append(title, subtitle);
   const actions = document.createElement('div');
   actions.className = 'list-actions';
-  if (canEditPlaylist() && !isCurrent) actions.append(actionButton('재생', 'select', track.id));
+  if (canEditPlaylist() && (!isCurrent || !state.playing)) actions.append(actionButton('재생', 'select', track.id));
   if (canEditPlaylist()) actions.append(actionButton('삭제', 'remove', track.id));
-  row.append(dragHandle, image, details, actions);
+  row.append(dragHandle, number, image, details, actions);
   return row;
 }
 
@@ -593,8 +596,16 @@ function ensurePlayer() {
       },
       onStateChange(event) {
         if (event.target !== player) return;
-        if (event.data === YT.PlayerState.PLAYING) { playerError = null; userActivated = true; failedVideoIds.clear(); }
-        if (event.data === YT.PlayerState.CUED) syncPlayer();
+        if (event.data === YT.PlayerState.PLAYING) {
+          playerError = null;
+          autoplayBlocked = false;
+          autoplayAttempted = false;
+          failedVideoIds.clear();
+        }
+        if (event.data === YT.PlayerState.CUED || event.data === YT.PlayerState.PAUSED) {
+          autoplayAttempted = false;
+          syncPlayer();
+        }
         if (state?.videoId && playerReady && event.data === YT.PlayerState.ENDED && state.current && advancingTrackId !== state.current.id) {
           advancingTrackId = state.current.id;
           sendControl('next', { trackId: advancingTrackId, playbackEpoch: state.playbackEpoch, fromEnd: true }).then((result) => { if (!result) advancingTrackId = null; });
@@ -603,7 +614,8 @@ function ensurePlayer() {
       },
       onAutoplayBlocked(event) {
         if (event.target !== player) return;
-        userActivated = false;
+        autoplayBlocked = true;
+        autoplayAttempted = false;
         render();
       },
       onError(event) {
@@ -625,14 +637,17 @@ function syncPlayer() {
       playerTrackId = state.current.id;
       playerEpoch = state.playbackEpoch;
       const video = { videoId: state.videoId, startSeconds: target };
-      if (state.playing && userActivated) player.loadVideoById(video);
+      if (state.playing && !autoplayBlocked) {
+        autoplayAttempted = true;
+        player.loadVideoById(video);
+      }
       else player.cueVideoById(video);
       render();
       return;
     }
     if (target > 1.5) player.cueVideoById({ videoId: state.videoId, startSeconds: target });
   }
-  if (!userActivated) {
+  if (autoplayBlocked) {
     if (!state.playing && player.getPlayerState() === YT.PlayerState.PLAYING) player.pauseVideo();
     render();
     return;
@@ -641,7 +656,10 @@ function syncPlayer() {
   const actual = player.getCurrentTime() || 0;
   if (Math.abs(target - actual) > 2) player.seekTo(target, true);
   const playerState = player.getPlayerState();
-  if (state.playing && userActivated && [YT.PlayerState.PAUSED, YT.PlayerState.CUED, YT.PlayerState.UNSTARTED].includes(playerState)) player.playVideo();
+  if (state.playing && !autoplayAttempted && [YT.PlayerState.PAUSED, YT.PlayerState.CUED, YT.PlayerState.UNSTARTED].includes(playerState)) {
+    autoplayAttempted = true;
+    player.playVideo();
+  }
   if (!state.playing && playerState === YT.PlayerState.PLAYING) player.pauseVideo();
   render();
 }
@@ -653,7 +671,7 @@ function applyState(next) {
   state = next;
   stateReceivedAt = Date.now();
   if (videoChanged) {
-    userActivated = Boolean(next.playing && userActivated);
+    autoplayAttempted = false;
     playerInitialized = false;
     metadataReportedTrackId = null;
     advancingTrackId = null;
@@ -690,7 +708,8 @@ async function enterRoom(id, createdHostToken = null) {
   isHost = false;
   state = null;
   stateReceivedAt = 0;
-  userActivated = false;
+  autoplayBlocked = false;
+  autoplayAttempted = false;
   failedVideoIds.clear();
   ui.searchQuery.value = '';
   resetSearchResults();
@@ -958,7 +977,7 @@ ui.playlistList.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-action]');
   if (!button) return;
   if (button.dataset.action === 'select') {
-    userActivated = true;
+    autoplayBlocked = false;
     sendControl('select', { trackId: button.dataset.trackId });
     return;
   }
@@ -1056,24 +1075,10 @@ ui.playlistList.addEventListener('keydown', async (event) => {
     .find((button) => button.dataset.trackId === handle.dataset.trackId)?.focus();
 });
 
-ui.toggle.addEventListener('click', () => {
-  if (!playerReady || !state?.videoId || playerError) return;
-  userActivated = true;
-  const position = expectedPosition();
-  if (state.playing) {
-    player.pauseVideo();
-    sendControl('pause', { position });
-  } else {
-    player.seekTo(position, true);
-    player.playVideo();
-    sendControl('play', { position });
-  }
-  render();
-});
-
 ui.joinPlay.addEventListener('click', () => {
   if (!playerReady) return showToast('영상을 불러오는 중이에요. 잠시 후 다시 눌러주세요.');
-  userActivated = true;
+  autoplayBlocked = false;
+  autoplayAttempted = true;
   player.seekTo(expectedPosition(), true);
   player.playVideo();
   render();

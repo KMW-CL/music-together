@@ -212,7 +212,7 @@ function newRoom(rooms) {
 function saveRecord(room) {
   return {
     id: room.id, playlist: room.playlist, currentId: room.currentId,
-    playbackEpoch: room.playbackEpoch, playing: false,
+    playbackEpoch: room.playbackEpoch, playing: room.playing, continuousPlayback: true,
     repeat: room.repeat, repeatOne: room.repeatOne,
     shuffle: room.shuffle, shuffleRemaining: room.shuffleRemaining,
     hostOnly: room.hostOnly, hostTokenHash: room.hostTokenHash,
@@ -275,7 +275,7 @@ function loadRooms(storagePath) {
       playlist,
       currentId: playlist.some((track) => track.id === record.currentId) ? record.currentId : legacy?.currentId || playlist[0]?.id || null,
       playbackEpoch: Number.isInteger(record.playbackEpoch) ? record.playbackEpoch : 0,
-      playing: false,
+      playing: Boolean(playlist.length && (record.continuousPlayback !== true || record.playing !== false)),
       repeat: record.repeatOne === true ? false : record.repeat !== false,
       repeatOne: record.repeatOne === true,
       shuffle: record.shuffle === true && record.repeatOne !== true,
@@ -370,7 +370,7 @@ async function handleControl(room, body, response, save, inspectVideo, isHost) {
         room.playlist.push(track);
         if (!room.currentId || body.type === 'load') {
           room.currentId = track.id;
-          room.playing = false;
+          room.playing = true;
           room.position = 0;
           room.playbackEpoch += 1;
           if (room.shuffle) room.shuffleRemaining = shuffledTrackIds(room);
