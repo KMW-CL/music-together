@@ -116,6 +116,60 @@ test('the next song uses the activated YouTube player while the tab is hidden', 
   assert.ok(players[0].loads[1].startSeconds < 0.1, 'replay should restart near the beginning');
 });
 
+test('playlist search jumps between matching rows without changing the playing track', async () => {
+  const elements = new Map();
+  const scrolled = [];
+  const makeElement = () => ({
+    listeners: {}, dataset: {}, children: [], value: '',
+    classList: { toggle() {}, add() {}, remove() {} },
+    addEventListener(type, listener) { this.listeners[type] = listener; },
+    setAttribute() {},
+    replaceChildren(...children) { this.children = children; },
+    append(...children) { this.children.push(...children); },
+    before() {}, remove() {},
+    scrollIntoView() { scrolled.push(this.dataset.trackId); },
+  });
+  const element = (id) => {
+    if (!elements.has(id)) elements.set(id, makeElement());
+    return elements.get(id);
+  };
+  const context = vm.createContext({
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById: element, createElement: makeElement },
+    window: { addEventListener() {}, matchMedia: () => ({ matches: false }) },
+    localStorage: { getItem: () => null },
+    location: { origin: 'http://localhost:3000', search: '' },
+    URLSearchParams, URL, Date, Math, Number, String, Boolean, Set,
+    setInterval() {}, clearTimeout() {}, setTimeout() {},
+  });
+  vm.runInContext(await readFile(new URL('./public/app.js', import.meta.url), 'utf8'), context);
+  vm.runInContext(`state = ${JSON.stringify({
+    currentId: 'a', repeat: true, playlist: [
+      { id: 'a', videoId: 'AAAAAAAAAAA', title: '첫 곡' },
+      { id: 'b', videoId: 'BBBBBBBBBBB', title: 'Moonlight' },
+      { id: 'c', videoId: 'CCCCCCCCCCC', title: 'Blue Moon' },
+    ],
+  })}; renderPlaylist()`, context);
+  const query = elements.get('playlistSearchQuery');
+  query.value = 'moon';
+  query.listeners.input();
+  assert.match(elements.get('playlistSearchStatus').textContent, /2곡 찾음/);
+  elements.get('playlistSearchForm').listeners.submit({ preventDefault() {} });
+  assert.deepEqual(scrolled, ['b']);
+  elements.get('playlistSearchNext').listeners.click();
+  assert.deepEqual(scrolled, ['b', 'c']);
+  elements.get('playlistSearchPrevious').listeners.click();
+  assert.deepEqual(scrolled, ['b', 'c', 'b']);
+  query.value = '3';
+  query.listeners.input();
+  elements.get('playlistSearchForm').listeners.submit({ preventDefault() {} });
+  assert.equal(scrolled.at(-1), 'c');
+  assert.equal(vm.runInContext('state.currentId', context), 'a');
+  query.value = '없는 곡';
+  query.listeners.input();
+  assert.equal(elements.get('playlistSearchNext').disabled, true);
+  assert.match(elements.get('playlistSearchStatus').textContent, /일치하는 곡이 없어요/);
+});
+
 test('search cards paginate without scrolling and fetch more after the loaded results', async () => {
   const elements = new Map();
   const makeElement = () => ({

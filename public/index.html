@@ -84,7 +84,13 @@
             </aside>
           </div>
           <div class="library-grid">
-            <section class="library-card" aria-labelledby="playlistHeading"><div class="library-heading"><div><div class="card-kicker">SHARED PLAYLIST</div><h2 id="playlistHeading">재생목록</h2></div><div class="playlist-heading-actions"><span id="playlistCount">0곡</span><div class="playlist-mode-buttons" role="group" aria-label="재생 방식"><button id="repeatButton" class="playlist-mode-button" type="button" aria-pressed="true">반복 재생</button><button id="repeatOneButton" class="playlist-mode-button" type="button" aria-pressed="false">한 곡 반복</button><button id="shuffleButton" class="playlist-mode-button" type="button" aria-pressed="false">랜덤 재생</button></div></div></div><p class="library-help">왼쪽 손잡이를 끌어서 곡 순서를 바꿔 보세요. 재생 방식은 위 버튼으로 변경할 수 있어요.</p><ol class="track-list" id="playlistList"></ol><p class="library-empty" id="playlistEmpty">아직 재생목록에 곡이 없어요. 검색하거나 링크로 추가해 보세요.</p></section>
+            <section class="library-card" aria-labelledby="playlistHeading"><div class="library-heading"><div><div class="card-kicker">SHARED PLAYLIST</div><h2 id="playlistHeading">재생목록</h2></div><div class="playlist-heading-actions"><span id="playlistCount">0곡</span><div class="playlist-mode-buttons" role="group" aria-label="재생 방식"><button id="repeatButton" class="playlist-mode-button" type="button" aria-pressed="true">반복 재생</button><button id="repeatOneButton" class="playlist-mode-button" type="button" aria-pressed="false">한 곡 반복</button><button id="shuffleButton" class="playlist-mode-button" type="button" aria-pressed="false">랜덤 재생</button></div></div></div><p class="library-help">왼쪽 손잡이를 끌어서 곡 순서를 바꿔 보세요. 재생 방식은 위 버튼으로 변경할 수 있어요.</p>
+              <form class="playlist-find" id="playlistSearchForm" role="search">
+                <label for="playlistSearchQuery">재생목록에서 찾기</label>
+                <div class="playlist-find-controls"><input id="playlistSearchQuery" type="search" placeholder="곡 제목 또는 순번" autocomplete="off" /><button class="playlist-find-submit" type="submit">찾기</button><div class="playlist-find-navigation" role="group" aria-label="검색 결과 이동"><button id="playlistSearchPrevious" type="button" aria-label="이전 검색 결과" disabled>↑</button><button id="playlistSearchNext" type="button" aria-label="다음 검색 결과" disabled>↓</button></div></div>
+                <p id="playlistSearchStatus" class="playlist-find-status" role="status" aria-live="polite">곡 제목이나 순번으로 목록에서 찾아보세요.</p>
+              </form>
+              <ol class="track-list" id="playlistList"></ol><p class="library-empty" id="playlistEmpty">아직 재생목록에 곡이 없어요. 검색하거나 링크로 추가해 보세요.</p></section>
           </div>
         </section>
       </main>

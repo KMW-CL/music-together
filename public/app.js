@@ -20,6 +20,8 @@ const ui = {
   volumeWaves: $('volumeWaves'), volumeMuteSlash: $('volumeMuteSlash'),
   next: $('nextTrackButton'),
   playbackLabel: $('playbackLabel'), playlistList: $('playlistList'), playlistCount: $('playlistCount'),
+  playlistSearchForm: $('playlistSearchForm'), playlistSearchQuery: $('playlistSearchQuery'),
+  playlistSearchStatus: $('playlistSearchStatus'), playlistSearchPrevious: $('playlistSearchPrevious'), playlistSearchNext: $('playlistSearchNext'),
   repeatButton: $('repeatButton'), repeatOneButton: $('repeatOneButton'), shuffleButton: $('shuffleButton'),
   playlistEmpty: $('playlistEmpty'), toast: $('toast'),
 };
@@ -55,6 +57,7 @@ let searchLoading = false;
 let searchedQuery = '';
 let searchDurationUnavailable = false;
 let playlistDrag = null;
+let playlistSearchTrackId = null;
 const volumeStorageKey = 'music-together-volume';
 const volumeRestoreStorageKey = 'music-together-volume-before-mute';
 const videoSizeStorageKey = 'music-together-compact-video';
@@ -383,6 +386,8 @@ function leaveRoom() {
   ui.searchStatus.textContent = '검색어를 입력해 주세요.';
   metadataReportedTrackId = null;
   durationReportedTrackId = null;
+  playlistSearchTrackId = null;
+  ui.playlistSearchQuery.value = '';
   advancingTrackId = null;
   destroyPlayer();
   ui.room.classList.add('hidden');
@@ -446,6 +451,7 @@ function trackRow(track, index, total) {
   row.dataset.trackId = track.id;
   const isCurrent = track.id === state.currentId;
   row.classList.toggle('is-current', isCurrent);
+  row.classList.toggle('is-search-target', track.id === playlistSearchTrackId);
   if (isCurrent) row.setAttribute('aria-current', 'true');
   const dragHandle = document.createElement('button');
   dragHandle.type = 'button';
@@ -494,6 +500,44 @@ function renderPlaylist() {
   ui.shuffleButton.disabled = !canEditPlaylist();
   ui.playlistEmpty.classList.toggle('hidden', playlist.length > 0);
   ui.playlistList.replaceChildren(...playlist.map((track, index) => trackRow(track, index, playlist.length)));
+  updatePlaylistSearch();
+}
+
+function playlistMatches() {
+  const query = (ui.playlistSearchQuery.value || '').trim().normalize('NFKC').toLocaleLowerCase();
+  if (!query) return [];
+  return (state?.playlist || []).map((track, index) => ({ track, index }))
+    .filter(({ track, index }) => String(track.title || '').normalize('NFKC').toLocaleLowerCase().includes(query)
+      || String(index + 1) === query);
+}
+
+function updatePlaylistSearch() {
+  const query = (ui.playlistSearchQuery.value || '').trim();
+  const matches = playlistMatches();
+  if (!matches.some(({ track }) => track.id === playlistSearchTrackId)) playlistSearchTrackId = null;
+  ui.playlistSearchPrevious.disabled = matches.length < 2;
+  ui.playlistSearchNext.disabled = matches.length < 2;
+  if (!query) ui.playlistSearchStatus.textContent = '곡 제목이나 순번으로 목록에서 찾아보세요.';
+  else if (!matches.length) ui.playlistSearchStatus.textContent = '일치하는 곡이 없어요.';
+  else if (!playlistSearchTrackId) ui.playlistSearchStatus.textContent = `${matches.length}곡 찾음 · 찾기를 누르면 해당 위치로 이동해요.`;
+  else {
+    const matchIndex = matches.findIndex(({ track }) => track.id === playlistSearchTrackId);
+    ui.playlistSearchStatus.textContent = `${matchIndex + 1} / ${matches.length} · 재생목록 ${matches[matchIndex].index + 1}번`;
+  }
+  for (const row of ui.playlistList.children || []) row.classList.toggle('is-search-target', row.dataset.trackId === playlistSearchTrackId);
+  return matches;
+}
+
+function jumpToPlaylistMatch(direction = 0) {
+  const matches = updatePlaylistSearch();
+  if (!matches.length) return;
+  const selected = matches.findIndex(({ track }) => track.id === playlistSearchTrackId);
+  const nextIndex = selected < 0 ? (direction < 0 ? matches.length - 1 : 0)
+    : direction === 0 ? selected : (selected + direction + matches.length) % matches.length;
+  playlistSearchTrackId = matches[nextIndex].track.id;
+  updatePlaylistSearch();
+  const row = [...ui.playlistList.children].find((item) => item.dataset.trackId === playlistSearchTrackId);
+  row?.scrollIntoView?.({ behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'instant' : 'smooth', block: 'center' });
 }
 
 function playerErrorMessage(code) {
@@ -711,6 +755,8 @@ async function enterRoom(id, createdHostToken = null) {
   isHost = false;
   state = null;
   stateReceivedAt = 0;
+  playlistSearchTrackId = null;
+  ui.playlistSearchQuery.value = '';
   autoplayBlocked = false;
   autoplayAttempted = false;
   failedVideoIds.clear();
@@ -986,6 +1032,17 @@ ui.playlistList.addEventListener('click', (event) => {
   }
   if (button.dataset.action === 'remove') sendControl('remove', { trackId: button.dataset.trackId });
 });
+
+ui.playlistSearchQuery.addEventListener('input', () => {
+  playlistSearchTrackId = null;
+  updatePlaylistSearch();
+});
+ui.playlistSearchForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  jumpToPlaylistMatch();
+});
+ui.playlistSearchPrevious.addEventListener('click', () => jumpToPlaylistMatch(-1));
+ui.playlistSearchNext.addEventListener('click', () => jumpToPlaylistMatch(1));
 
 function stopPlaylistDrag() {
   const drag = playlistDrag;
