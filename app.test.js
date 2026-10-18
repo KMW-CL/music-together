@@ -8,7 +8,12 @@ test('the next song uses the activated YouTube player while the tab is hidden', 
   const element = (id) => {
     if (!elements.has(id)) {
       elements.set(id, {
-        listeners: {}, dataset: {}, classList: { toggle() {}, add() {}, remove() {} },
+        listeners: {}, dataset: {}, classList: {
+          states: new Map(),
+          toggle(name, active) { this.states.set(name, active); },
+          add(name) { this.states.set(name, true); },
+          remove(name) { this.states.set(name, false); },
+        },
         addEventListener(type, listener) { this.listeners[type] = listener; },
         setAttribute() {}, replaceChildren() {}, append() {}, before() {}, remove() {},
       });
@@ -79,6 +84,7 @@ test('the next song uses the activated YouTube player while the tab is hidden', 
   assert.equal(players.length, 1);
   players[0].ready();
   assert.equal(players[0].getPlayerState(), playerStates.PLAYING, '입장하면 재생을 자동으로 시도한다');
+  assert.equal(elements.get('joinPlayButton').classList.states.get('hidden'), true);
   elements.get('volumeControl').value = '35';
   elements.get('volumeControl').listeners.input();
   assert.equal(players[0].volume, 35);
@@ -94,8 +100,10 @@ test('the next song uses the activated YouTube player while the tab is hidden', 
   players[0].playerState = playerStates.CUED;
   players[0].options.events.onAutoplayBlocked({ target: players[0] });
   assert.equal(vm.runInContext('autoplayBlocked', context), true);
+  assert.equal(elements.get('joinPlayButton').classList.states.get('hidden'), false);
   elements.get('joinPlayButton').listeners.click();
   assert.equal(players[0].getPlayerState(), playerStates.PLAYING, '자동 재생 차단 시 사용자가 소리를 켤 수 있다');
+  assert.equal(elements.get('joinPlayButton').classList.states.get('hidden'), true);
 
   context.applyState(room('second', 'BBBBBBBBBBB', 2));
   assert.equal(players.length, 1);
