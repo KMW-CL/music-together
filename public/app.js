@@ -40,6 +40,7 @@ let playerTrackId = null;
 let playerEpoch = null;
 let seeking = false;
 let metadataReportedTrackId = null;
+let durationReportedTrackId = null;
 let advancingTrackId = null;
 let toastTimer;
 let precheckEnabled = false;
@@ -381,6 +382,7 @@ function leaveRoom() {
   resetSearchResults();
   ui.searchStatus.textContent = '검색어를 입력해 주세요.';
   metadataReportedTrackId = null;
+  durationReportedTrackId = null;
   advancingTrackId = null;
   destroyPlayer();
   ui.room.classList.add('hidden');
@@ -674,6 +676,7 @@ function applyState(next) {
     autoplayAttempted = false;
     playerInitialized = false;
     metadataReportedTrackId = null;
+    durationReportedTrackId = null;
     advancingTrackId = null;
     playerError = null;
     if (!next.videoId && player) destroyPlayer();
@@ -1127,6 +1130,14 @@ setInterval(() => {
   ui.duration.textContent = formatTime(duration);
   if (playerReady) {
     const videoData = player.getVideoData();
+    if (state.current && !state.current.durationSeconds && duration > 0 && duration <= 86_400
+      && videoData?.video_id === state.videoId && playerTrackId === state.current.id
+      && durationReportedTrackId !== state.current.id) {
+      durationReportedTrackId = state.current.id;
+      sendControl('duration', { trackId: state.current.id, durationSeconds: Math.ceil(duration) }).then((result) => {
+        if (!result) durationReportedTrackId = null;
+      });
+    }
     if (state.current?.titleSource === 'fallback' && videoData?.video_id === state.videoId && videoData.title) ui.trackTitle.textContent = videoData.title;
     if (canEditPlaylist() && state.current?.titleSource === 'fallback' && videoData?.video_id === state.videoId && videoData.title && metadataReportedTrackId !== state.current.id) {
       metadataReportedTrackId = state.current.id;

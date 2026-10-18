@@ -79,7 +79,7 @@ async function inspectYouTubeVideo(videoId, apiKey, fetchVideo) {
   const url = new URL('https://www.googleapis.com/youtube/v3/videos');
   url.searchParams.set('part', 'snippet,status,contentDetails');
   url.searchParams.set('id', videoId);
-  url.searchParams.set('fields', 'items(id,snippet(title),status(embeddable,privacyStatus,uploadStatus),contentDetails(contentRating(ytRating)))');
+  url.searchParams.set('fields', 'items(id,snippet(title),status(embeddable,privacyStatus,uploadStatus),contentDetails(duration,contentRating(ytRating)))');
   let response;
   try {
     response = await fetchVideo(url, { headers: { 'x-goog-api-key': apiKey }, signal: AbortSignal.timeout(8_000) });
@@ -106,7 +106,7 @@ async function inspectYouTubeVideo(videoId, apiKey, fetchVideo) {
     return { configured: true, allowed: false, reason: '아직 재생할 수 있는 상태의 영상이 아니에요.' };
   }
   if (video.status?.embeddable !== true) throw new VideoCheckError('영상의 삽입 재생 가능 여부를 확인하지 못했어요.');
-  return { configured: true, allowed: true, title: video.snippet?.title?.trim().slice(0, 120) || '' };
+  return { configured: true, allowed: true, title: video.snippet?.title?.trim().slice(0, 120) || '', durationSeconds: durationSeconds(video.contentDetails?.duration) };
 }
 
 function durationSeconds(value) {
@@ -256,6 +256,43 @@ function shuffledTrackIds(room, includeCurrent = false) {
   return ids;
 }
 
+function advanceTrack(room, fromEnd = false) {
+  let nextId = null;
+  if (fromEnd && room.repeatOne) {
+    nextId = room.currentId;
+  } else if (room.shuffle) {
+    if (!room.shuffleRemaining.length && (room.repeat || room.repeatOne)) room.shuffleRemaining = shuffledTrackIds(room, true);
+    nextId = room.shuffleRemaining.pop() || null;
+  } else {
+    const index = room.playlist.findIndex((track) => track.id === room.currentId);
+    nextId = room.playlist[index + 1]?.id || ((room.repeat || room.repeatOne) ? room.playlist[0]?.id : null);
+  }
+  if (nextId) room.currentId = nextId;
+  else room.playing = false;
+  room.position = 0;
+  room.playbackEpoch += 1;
+}
+
+function advanceDueTracks(room, now = Date.now()) {
+  let changed = false;
+  let elapsed = currentPosition(room, now);
+  let transitions = 0;
+  while (room.playing && transitions < 1_000) {
+    const duration = currentTrack(room)?.durationSeconds;
+    if (!Number.isFinite(duration) || duration <= 0 || elapsed < duration) break;
+    elapsed -= duration;
+    advanceTrack(room, true);
+    room.version += 1;
+    changed = true;
+    transitions += 1;
+  }
+  if (changed) {
+    room.position = room.playing && transitions < 1_000 ? elapsed : 0;
+    room.updatedAt = now;
+  }
+  return changed;
+}
+
 function loadRooms(storagePath) {
   const rooms = new Map();
   if (!storagePath) return rooms;
@@ -283,7 +320,8 @@ function loadRooms(storagePath) {
       hostTokenHash: /^[a-f0-9]{64}$/.test(record.hostTokenHash || '') ? record.hostTokenHash : null,
       hostOnly: record.hostOnly === true && /^[a-f0-9]{64}$/.test(record.hostTokenHash || ''),
       position: Number.isFinite(record.position) ? record.position : 0,
-      updatedAt: Date.now(),
+      updatedAt: record.continuousPlayback === true && Number.isFinite(record.updatedAt)
+        ? Math.min(record.updatedAt, Date.now()) : Date.now(),
       version: Number.isInteger(record.version) ? record.version : 0,
       clients: new Set(),
     };
@@ -366,6 +404,7 @@ async function handleControl(room, body, response, save, inspectVideo, isHost) {
           track.title = inspection.title;
           track.titleSource = 'auto';
         }
+        if (inspection.durationSeconds) track.durationSeconds = inspection.durationSeconds;
         if (room.playlist.length >= MAX_PLAYLIST_LENGTH) return json(response, 400, { error: '재생목록에는 최대 500곡까지 담을 수 있어요.' });
         room.playlist.push(track);
         if (!room.currentId || body.type === 'load') {
@@ -397,20 +436,18 @@ async function handleControl(room, body, response, save, inspectVideo, isHost) {
         if (Number.isInteger(body.playbackEpoch) && body.playbackEpoch !== room.playbackEpoch) {
           return json(response, 200, roomState(room));
         }
-        let nextId = null;
-        if (body.fromEnd === true && room.repeatOne) {
-          nextId = room.currentId;
-        } else if (room.shuffle) {
-          if (!room.shuffleRemaining.length && (room.repeat || room.repeatOne)) room.shuffleRemaining = shuffledTrackIds(room, true);
-          nextId = room.shuffleRemaining.pop() || null;
-        } else {
-          const index = room.playlist.findIndex((track) => track.id === room.currentId);
-          nextId = room.playlist[index + 1]?.id || ((room.repeat || room.repeatOne) ? room.playlist[0].id : null);
+        advanceTrack(room, body.fromEnd === true);
+        break;
+      }
+      case 'duration': {
+        const current = currentTrack(room);
+        if (!current || current.id !== body.trackId) return json(response, 200, roomState(room));
+        const seconds = Number(body.durationSeconds);
+        if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86_400) {
+          return json(response, 400, { error: '영상 길이를 확인해 주세요.' });
         }
-        if (nextId) room.currentId = nextId;
-        else room.playing = false;
-        room.position = 0;
-        room.playbackEpoch += 1;
+        if (current.durationSeconds) return json(response, 200, roomState(room));
+        current.durationSeconds = seconds;
         break;
       }
       case 'repeat':
@@ -534,6 +571,11 @@ export function createAppServer({ storagePath = null, youtubeApiKey = null, fetc
     }
   };
   const inspectVideo = (videoId) => inspectYouTubeVideo(videoId, getApiKey(), fetchVideo);
+  const catchUpRoom = async (room) => {
+    if (!advanceDueTracks(room)) return;
+    broadcast(room);
+    await save();
+  };
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
@@ -551,6 +593,7 @@ export function createAppServer({ storagePath = null, youtubeApiKey = null, fetc
       if (match) {
         const room = rooms.get(match[1]);
         if (!room) return json(response, 404, { error: '방을 찾을 수 없어요. 새 방을 만들어주세요.' });
+        await catchUpRoom(room);
         if (request.method === 'GET' && !match[2]) return json(response, 200, roomState(room));
         if (request.method === 'GET' && match[2] === 'host') return json(response, 200, { isHost: isRoomHost(room, request) });
         if (request.method === 'POST' && match[2] === 'claim-host') {
@@ -621,6 +664,9 @@ export function createAppServer({ storagePath = null, youtubeApiKey = null, fetc
     }
   });
   server.saveRooms = save;
+  server.advanceRooms = async () => {
+    for (const room of rooms.values()) await catchUpRoom(room);
+  };
   return server;
 }
 
@@ -633,4 +679,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     for (const address of addresses) console.log(`같은 네트워크에서 접속: http://${address.address}:${port}`);
   });
   setInterval(() => server.saveRooms().catch((error) => console.error('방 저장 실패:', error)), 15_000).unref();
+  setInterval(() => server.advanceRooms().catch((error) => console.error('자동 재생 진행 실패:', error)), 1_000).unref();
 }

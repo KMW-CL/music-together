@@ -487,7 +487,7 @@ test('configured YouTube precheck rejects blocked videos and adds an allowed tit
         id,
         snippet: { title: 'API에서 확인한 제목' },
         status: { embeddable: id !== 'bGyOYEZMRsc', privacyStatus: 'public', uploadStatus: 'processed' },
-        contentDetails: { contentRating: {} },
+        contentDetails: { duration: 'PT3M33S', contentRating: {} },
       }];
       return { ok: true, json: async () => ({ items }) };
     },
@@ -517,11 +517,62 @@ test('configured YouTube precheck rejects blocked videos and adds an allowed tit
     assert.equal(allowed.status, 200);
     assert.equal(allowed.body.current.title, 'API에서 확인한 제목');
     assert.equal(allowed.body.current.titleSource, 'auto');
+    assert.equal(allowed.body.current.durationSeconds, 213);
     assert.deepEqual(inspected, ['bGyOYEZMRsc', 'n5Ps-iGFifk', 'ABCDEFGHIJK', 'dQw4w9WgXcQ']);
     assert.equal(JSON.stringify(allowed.body).includes('test-key'), false);
   } finally {
     await new Promise((resolve) => checkedServer.close(resolve));
   }
+});
+
+test('a room advances through known durations without a connected player', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'music-together-test-'));
+  const storagePath = path.join(directory, 'rooms.json');
+  const playlist = [
+    { id: 'first', videoId: 'AAAAAAAAAAA', title: '첫 곡', durationSeconds: 10 },
+    { id: 'second', videoId: 'BBBBBBBBBBB', title: '두 번째 곡', durationSeconds: 20 },
+  ];
+  await writeFile(storagePath, JSON.stringify([
+    { id: '1234abcd', playlist, currentId: 'first', playing: true, continuousPlayback: true,
+      repeat: true, position: 0, updatedAt: Date.now() - 25_000, version: 1 },
+    { id: '5678abcd', playlist, currentId: 'first', playing: true, continuousPlayback: true,
+      repeat: false, position: 0, updatedAt: Date.now() - 35_000, version: 1 },
+  ]));
+  const localServer = createAppServer({ storagePath, youtubeApiKey: '' });
+  try {
+    await new Promise((resolve) => localServer.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${localServer.address().port}`;
+    const midway = await (await fetch(`${origin}/api/rooms/1234abcd`)).json();
+    assert.equal(midway.currentId, 'second');
+    assert.ok(midway.position >= 14 && midway.position < 17);
+    assert.equal(midway.playing, true);
+    const ended = await (await fetch(`${origin}/api/rooms/5678abcd`)).json();
+    assert.equal(ended.playing, false);
+    assert.equal(ended.position, 0);
+    assert.equal(ended.playbackEpoch, 2);
+  } finally {
+    if (localServer.listening) await new Promise((resolve) => localServer.close(resolve));
+    assert.ok(path.resolve(directory).startsWith(`${path.resolve(tmpdir())}${path.sep}`));
+    assert.ok(path.basename(directory).startsWith('music-together-test-'));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a player can report duration so the server advances a room without an API key', async () => {
+  const created = await request('/api/rooms', { method: 'POST' });
+  const id = created.body.id;
+  const control = async (body) => request(`/api/rooms/${id}/control`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const added = await control({ type: 'add', videoId: 'AAAAAAAAAAA' });
+  const trackId = added.body.current.id;
+  const reported = await control({ type: 'duration', trackId, durationSeconds: 10 });
+  assert.equal(reported.body.current.durationSeconds, 10);
+  await control({ type: 'seek', position: 11 });
+  const advanced = await request(`/api/rooms/${id}`);
+  assert.equal(advanced.body.playbackEpoch, added.body.playbackEpoch + 1);
+  assert.equal(advanced.body.currentId, trackId);
+  assert.ok(advanced.body.position >= 1 && advanced.body.position < 3);
 });
 
 test('any room member can search embeddable videos without exposing the API key', async () => {
