@@ -541,6 +541,7 @@ test('a room advances through known durations without a connected player', async
   const localServer = createAppServer({ storagePath, youtubeApiKey: '' });
   try {
     await new Promise((resolve) => localServer.listen(0, '127.0.0.1', resolve));
+    await localServer.advanceRooms();
     const origin = `http://127.0.0.1:${localServer.address().port}`;
     const midway = await (await fetch(`${origin}/api/rooms/1234abcd`)).json();
     assert.equal(midway.currentId, 'second');
