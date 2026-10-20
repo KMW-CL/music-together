@@ -20,7 +20,7 @@ const ui = {
   volumeWaves: $('volumeWaves'), volumeMuteSlash: $('volumeMuteSlash'),
   next: $('nextTrackButton'),
   playbackLabel: $('playbackLabel'), playlistList: $('playlistList'), playlistCount: $('playlistCount'),
-  playlistSearchForm: $('playlistSearchForm'), playlistSearchQuery: $('playlistSearchQuery'),
+  playlistSearchForm: $('playlistSearchForm'), playlistSearchQuery: $('playlistSearchQuery'), backToPlayer: $('backToPlayerButton'),
   playlistSearchStatus: $('playlistSearchStatus'), playlistSearchPrevious: $('playlistSearchPrevious'), playlistSearchNext: $('playlistSearchNext'),
   repeatButton: $('repeatButton'), repeatOneButton: $('repeatOneButton'), shuffleButton: $('shuffleButton'),
   playlistEmpty: $('playlistEmpty'), toast: $('toast'),
@@ -1045,6 +1045,12 @@ ui.playlistSearchForm.addEventListener('submit', (event) => {
 });
 ui.playlistSearchPrevious.addEventListener('click', () => jumpToPlaylistMatch(-1));
 ui.playlistSearchNext.addEventListener('click', () => jumpToPlaylistMatch(1));
+ui.backToPlayer.addEventListener('click', () => {
+  ui.playerPanel.scrollIntoView({
+    behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'auto' : 'smooth',
+    block: 'start',
+  });
+});
 
 function stopPlaylistDrag() {
   const drag = playlistDrag;
