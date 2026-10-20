@@ -27,15 +27,7 @@ function cleanLyricsTitle(title) {
 function lyricsSignature(title) {
   const cleaned = cleanLyricsTitle(title);
   const pair = cleaned.match(/(?:^|[:：]\s*)([^:：]+?)\s+[-–—]\s+(.+)$/);
-  if (pair) {
-    const artist = pair[1].trim();
-    const track = pair[2].trim();
-    // Video uploads sometimes use a translated title that lyric catalogs do not index.
-    if (normalizedLyricsArtist(artist) === 'vaundy' && normalizedLyricsName(track) === '괴수의 꽃노래') {
-      return { artist, track: '怪獣の花唄' };
-    }
-    return { artist, track };
-  }
+  if (pair) return { artist: pair[1].trim(), track: pair[2].trim() };
   const quoted = cleaned.match(/^(.+?)\s+['"“‘]([^'"”’]+)['"”’]$/);
   return quoted ? { artist: quoted[1].trim(), track: quoted[2].trim() } : { artist: '', track: cleaned };
 }
@@ -119,9 +111,7 @@ async function lyricsSearch(parameters, signal) {
   return records;
 }
 
-async function findLyrics(title, duration, signal) {
-  const signature = lyricsSignature(title);
-  if (!signature.track || /^유튜브 영상\s*[·-]/.test(signature.track)) return null;
+async function lookupLyrics(signature, duration, signal) {
   const search = signature.artist
     ? { track_name: signature.track, artist_name: signature.artist }
     : { q: signature.track };
@@ -151,6 +141,56 @@ async function findLyrics(title, duration, signal) {
     }
   }
   if (match) return { ...match, _lyricsSource: 'lrclib' };
+  if (searchError) throw searchError;
+  return null;
+}
+
+function lyricsTitleVariants(track) {
+  const variants = [track];
+  const pair = track.match(/^(.+?)\s*[([（【]\s*([^\])）】]+)\s*[)\]）】]\s*$/u);
+  if (pair) variants.push(pair[1].trim(), pair[2].trim());
+  return variants;
+}
+
+async function suggestedLyricsTitles(signature, signal) {
+  if (!signature.artist) return [];
+  const query = new URLSearchParams({ artist: signature.artist, track: signature.track });
+  const response = await fetch(`/api/lyrics/titles?${query}`, { signal });
+  if (!response.ok) return [];
+  const data = await response.json();
+  return Array.isArray(data.titles)
+    ? data.titles.filter((title) => typeof title === 'string' && title.length > 0 && title.length <= 100)
+    : [];
+}
+
+async function findLyrics(title, duration, signal) {
+  const signature = lyricsSignature(title);
+  if (!signature.track || /^유튜브 영상\s*[·-]/.test(signature.track)) return null;
+  const searched = new Set();
+  let searchError = null;
+  async function findFromTitles(titles) {
+    for (const track of titles) {
+      const key = normalizedLyricsName(track);
+      if (!key || searched.has(key) || signal.aborted) continue;
+      searched.add(key);
+      try {
+        const record = await lookupLyrics({ ...signature, track }, duration, signal);
+        if (record) return record;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        searchError ||= error;
+      }
+    }
+    return null;
+  }
+  let record = await findFromTitles(lyricsTitleVariants(signature.track));
+  if (record) return record;
+  try {
+    record = await findFromTitles(await suggestedLyricsTitles(signature, signal));
+  } catch (error) {
+    if (signal.aborted) throw error;
+  }
+  if (record) return record;
   if (searchError) throw searchError;
   return null;
 }
@@ -264,7 +304,7 @@ async function setLyricsTrack(trackId, title, duration = 0) {
   showLyricsMessage('가사를 찾는 중…');
   const controller = new AbortController();
   lyricsController = controller;
-  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const timeout = setTimeout(() => controller.abort(), 25_000);
   try {
     const record = await findLyrics(title, duration, controller.signal);
     if (requestId !== lyricsRequestId) return;

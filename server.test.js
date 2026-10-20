@@ -72,6 +72,34 @@ test('serves the application', async () => {
   assert.match(lyrics.headers.get('content-type'), /text\/javascript/);
 });
 
+test('title suggestions keep only same-artist translated title pairs and cache them', async () => {
+  let calls = 0;
+  const suggestionServer = createAppServer({ youtubeApiKey: '', fetchSuggestions: async (url) => {
+    calls++;
+    const query = new URL(url).searchParams.get('q');
+    return { ok: true, json: async () => [query, [
+      'Other Artist - 怪獣の花唄(괴수의 꽃노래)',
+      'Vaundy - 怪獣の花唄(괴수의 꽃노래)',
+      'Vaundy - unrelated song',
+    ]] };
+  } });
+  await new Promise((resolve) => suggestionServer.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${suggestionServer.address().port}`;
+  try {
+    const url = `${origin}/api/lyrics/titles?artist=Vaundy&track=${encodeURIComponent('괴수의 꽃노래')}`;
+    const first = await fetch(url).then((response) => response.json());
+    const second = await fetch(url).then((response) => response.json());
+    assert.deepEqual(first.titles, ['怪獣の花唄']);
+    assert.deepEqual(second, first);
+    const withArtistAlias = await fetch(`${origin}/api/lyrics/titles?artist=${encodeURIComponent('Vaundy (바운디)')}&track=${encodeURIComponent('괴수의 꽃노래')}`)
+      .then((response) => response.json());
+    assert.deepEqual(withArtistAlias.titles, ['怪獣の花唄']);
+    assert.equal(calls, 2);
+  } finally {
+    await new Promise((resolve) => suggestionServer.close(resolve));
+  }
+});
+
 test('live stream reports connected listeners and removes them on disconnect', async () => {
   const created = await request('/api/rooms', { method: 'POST' });
   const id = created.body.id;

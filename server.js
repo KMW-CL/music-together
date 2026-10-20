@@ -559,10 +559,40 @@ async function serveFile(url, response) {
   response.end(file);
 }
 
-export function createAppServer({ storagePath = null, youtubeApiKey = null, fetchVideo = fetch } = {}) {
+function normalizedSongLabel(value) {
+  return String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function originalTitlesFromSuggestions(suggestions, artist, translatedTitle) {
+  const artistKeys = new Set([
+    normalizedSongLabel(artist),
+    normalizedSongLabel(artist.replace(/[（(][^）)]*[）)]/gu, '')),
+    ...[...artist.matchAll(/[（(]([^）)]+)[）)]/gu)].map((match) => normalizedSongLabel(match[1])),
+  ].filter(Boolean));
+  const titleKey = normalizedSongLabel(translatedTitle);
+  const titles = new Set();
+  for (const suggestion of suggestions) {
+    if (typeof suggestion !== 'string') continue;
+    const pair = suggestion.match(/^(.+?)\s+[-–—]\s+(.+)$/u);
+    if (!pair || !artistKeys.has(normalizedSongLabel(pair[1]))) continue;
+    const titlesPair = pair[2].match(/^(.+?)\s*[([（【]\s*([^\])）】]+)\s*[)\]）】]\s*$/u);
+    if (!titlesPair) continue;
+    const first = titlesPair[1].trim();
+    const second = titlesPair[2].trim();
+    const firstKey = normalizedSongLabel(first);
+    const secondKey = normalizedSongLabel(second);
+    if (firstKey === titleKey && secondKey && secondKey !== titleKey) titles.add(second);
+    if (secondKey === titleKey && firstKey && firstKey !== titleKey) titles.add(first);
+    if (titles.size >= 3) break;
+  }
+  return [...titles];
+}
+
+export function createAppServer({ storagePath = null, youtubeApiKey = null, fetchVideo = fetch, fetchSuggestions = fetch } = {}) {
   const rooms = loadRooms(storagePath);
   const save = createSaver(rooms, storagePath);
   const searchCache = new Map();
+  const lyricTitleCache = new Map();
   const getApiKey = () => {
     if (youtubeApiKey !== null) return youtubeApiKey.trim();
     if (process.env.YOUTUBE_API_KEY) return process.env.YOUTUBE_API_KEY.trim();
@@ -583,6 +613,31 @@ export function createAppServer({ storagePath = null, youtubeApiKey = null, fetc
       const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
       if (request.method === 'GET' && url.pathname === '/api/config') {
         return json(response, 200, { precheckEnabled: Boolean(getApiKey()) });
+      }
+      if (request.method === 'GET' && url.pathname === '/api/lyrics/titles') {
+        const artist = (url.searchParams.get('artist') || '').trim();
+        const track = (url.searchParams.get('track') || '').trim();
+        if (!artist || !track || artist.length > 100 || track.length > 100) {
+          return json(response, 400, { error: '가수와 곡 제목을 확인해 주세요.' });
+        }
+        const key = JSON.stringify([artist.toLocaleLowerCase(), track.toLocaleLowerCase()]);
+        const cached = lyricTitleCache.get(key);
+        if (cached && Date.now() - cached.at < 24 * 60 * 60_000) return json(response, 200, { titles: cached.titles });
+        let titles = [];
+        try {
+          const query = new URLSearchParams({ client: 'firefox', q: `${artist} ${track}` });
+          const result = await fetchSuggestions(`https://suggestqueries.google.com/complete/search?${query}`, {
+            headers: { 'User-Agent': 'SudeemiMusic/0.1.0 (https://github.com/KMW-CL/music-together)' },
+            signal: AbortSignal.timeout(4_000),
+          });
+          if (result.ok) {
+            const data = await result.json();
+            titles = originalTitlesFromSuggestions(Array.isArray(data?.[1]) ? data[1] : [], artist, track);
+          }
+        } catch { /* Suggestions are optional. */ }
+        if (lyricTitleCache.size >= 200) lyricTitleCache.delete(lyricTitleCache.keys().next().value);
+        lyricTitleCache.set(key, { at: Date.now(), titles });
+        return json(response, 200, { titles });
       }
       if (request.method === 'POST' && url.pathname === '/api/rooms') {
         const room = newRoom(rooms);

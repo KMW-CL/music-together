@@ -54,7 +54,9 @@ test('lyrics matching rejects a different artist and ambiguous title', () => {
   assert.equal(official.track, 'Runaway');
   const translated = vm.runInContext("lyricsSignature('다시 듣고 싶어, 너의 노래가🌻: Vaundy - 괴수의 꽃노래 [가사/발음/해석]')", context);
   assert.equal(translated.artist, 'Vaundy');
-  assert.equal(translated.track, '怪獣の花唄');
+  assert.equal(translated.track, '괴수의 꽃노래');
+  context.videoTitleVariants = vm.runInContext("lyricsTitleVariants('괴수의 꽃노래 (怪獣の花唄)')", context);
+  assert.equal(context.videoTitleVariants[2], '怪獣の花唄');
   const records = [
     { trackName: 'Never Gonna Give You Up', artistName: 'Cover Band', duration: 213, plainLyrics: 'Wrong' },
     { trackName: 'Never Gonna Give You Up', artistName: 'Rick Astley', duration: 212, syncedLyrics: '[00:01.00]Right' },
@@ -113,8 +115,35 @@ test('Japanese lyrics win over romanization for a Japanese song', () => {
     { trackName: '怪獣の花唄', artistName: 'Vaundy', duration: 232,
       syncedLyrics: '[00:01.00]日本語の歌詞です\n[00:12.00]次の日本語の歌詞です' },
   ];
-  const chosen = vm.runInContext('bestLyricsRecord(variants, lyricsSignature("Vaundy - 괴수의 꽃노래"), 226)', context);
+  const chosen = vm.runInContext('bestLyricsRecord(variants, lyricsSignature("Vaundy - 怪獣の花唄"), 226)', context);
   assert.equal(chosen.duration, 232);
+});
+
+test('translated titles resolve to matching originals across artists', async () => {
+  for (const sample of [
+    { video: '다시 듣고 싶어, 너의 노래가🌻: Vaundy - 괴수의 꽃노래 [가사/발음/해석]',
+      artist: 'Vaundy', translated: '괴수의 꽃노래', original: '怪獣の花唄' },
+    { video: 'YOASOBI - 밤을 달리다 [가사/해석]',
+      artist: 'YOASOBI', translated: '밤을 달리다', original: '夜に駆ける' },
+  ]) {
+    const requests = [];
+    const { context, elements } = lyricsContext(async (url) => {
+      requests.push(url);
+      if (url.startsWith('/api/lyrics/titles?')) return {
+        ok: true, json: async () => ({ titles: [sample.original] }),
+      };
+      if (url.startsWith('https://api.lrcmux.dev/')) return { ok: true, json: async () => [] };
+      const found = new URL(url).searchParams.get('track_name') === sample.original;
+      return { ok: true, json: async () => found ? [{
+        trackName: sample.original, artistName: sample.artist, duration: 220,
+        syncedLyrics: '[00:01.00]日本語の歌詞です',
+      }] : [] };
+    });
+    await context.window.musicLyrics.setTrack('track-1', sample.video, 220);
+    assert.ok(requests.some((url) => url.startsWith('/api/lyrics/titles?')));
+    assert.ok(requests.some((url) => url.includes(`track_name=${encodeURIComponent(sample.original)}`)));
+    assert.equal(elements.get('lyricsLines').children[0].textContent, '日本語の歌詞です');
+  }
 });
 
 test('Korean lyrics from the fallback source replace romanized synced lyrics', async () => {
