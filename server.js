@@ -96,17 +96,24 @@ async function inspectYouTubeVideo(videoId, apiKey, fetchVideo) {
   catch { throw new VideoCheckError('YouTube 사전 검사 결과를 읽지 못했어요.'); }
   if (!Array.isArray(data.items)) throw new VideoCheckError('YouTube 사전 검사 결과가 올바르지 않아요.');
   const video = data.items?.find((item) => item.id === videoId);
-  if (!video) return { configured: true, allowed: false, reason: '영상을 찾을 수 없거나 비공개 상태예요.' };
-  if (video.status?.privacyStatus === 'private') return { configured: true, allowed: false, reason: '비공개 영상은 방에서 재생할 수 없어요.' };
-  if (video.status?.embeddable === false) return { configured: true, allowed: false, reason: '이 영상은 외부 사이트 재생이 허용되지 않아요.' };
+  const restriction = videoPlaybackRestriction(video);
+  if (restriction?.unknown) throw new VideoCheckError(restriction.reason);
+  if (restriction) return { configured: true, allowed: false, reason: restriction.reason };
+  return { configured: true, allowed: true, title: video.snippet?.title?.trim().slice(0, 120) || '', durationSeconds: durationSeconds(video.contentDetails?.duration) };
+}
+
+function videoPlaybackRestriction(video) {
+  if (!video) return { reason: '영상을 찾을 수 없거나 비공개 상태예요.' };
+  if (video.status?.privacyStatus === 'private') return { reason: '비공개 영상은 방에서 재생할 수 없어요.' };
+  if (video.status?.embeddable === false) return { reason: '이 영상은 외부 사이트 재생이 허용되지 않아요.' };
   if (video.contentDetails?.contentRating?.ytRating === 'ytAgeRestricted') {
-    return { configured: true, allowed: false, reason: '연령 제한 영상은 방 안에서 재생할 수 없어요.' };
+    return { reason: '연령 제한 영상은 방 안에서 재생할 수 없어요.' };
   }
   if (video.status?.uploadStatus && video.status.uploadStatus !== 'processed') {
-    return { configured: true, allowed: false, reason: '아직 재생할 수 있는 상태의 영상이 아니에요.' };
+    return { reason: '아직 재생할 수 있는 상태의 영상이 아니에요.' };
   }
-  if (video.status?.embeddable !== true) throw new VideoCheckError('영상의 삽입 재생 가능 여부를 확인하지 못했어요.');
-  return { configured: true, allowed: true, title: video.snippet?.title?.trim().slice(0, 120) || '', durationSeconds: durationSeconds(video.contentDetails?.duration) };
+  if (video.status?.embeddable !== true) return { reason: '영상의 삽입 재생 가능 여부를 확인하지 못했어요.', unknown: true };
+  return null;
 }
 
 function durationSeconds(value) {
@@ -118,24 +125,28 @@ function durationSeconds(value) {
   return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : null;
 }
 
-async function searchVideoDurations(videoIds, apiKey, fetchVideo) {
-  const durations = new Map();
-  if (!videoIds.length) return { durations, unavailable: false };
+async function searchPlayableVideos(items, apiKey, fetchVideo) {
+  if (!items.length) return [];
   const url = new URL('https://www.googleapis.com/youtube/v3/videos');
-  url.searchParams.set('part', 'contentDetails');
-  url.searchParams.set('id', [...new Set(videoIds)].join(','));
-  url.searchParams.set('fields', 'items(id,contentDetails(duration))');
+  url.searchParams.set('part', 'status,contentDetails');
+  url.searchParams.set('id', [...new Set(items.map((item) => item.videoId))].join(','));
+  url.searchParams.set('fields', 'items(id,status(embeddable,privacyStatus,uploadStatus),contentDetails(duration,contentRating(ytRating)))');
+  let response;
   try {
-    const response = await fetchVideo(url, { headers: { 'x-goog-api-key': apiKey }, signal: AbortSignal.timeout(8_000) });
-    if (!response.ok) return { durations, unavailable: true };
-    const data = await response.json();
-    if (!Array.isArray(data.items)) return { durations, unavailable: true };
-    for (const video of data.items) {
-      const seconds = durationSeconds(video.contentDetails?.duration);
-      if (typeof video.id === 'string' && seconds !== null) durations.set(video.id, seconds);
-    }
-  } catch { return { durations, unavailable: true }; }
-  return { durations, unavailable: false };
+    response = await fetchVideo(url, { headers: { 'x-goog-api-key': apiKey }, signal: AbortSignal.timeout(8_000) });
+  } catch {
+    throw new VideoCheckError('검색 결과의 재생 가능 여부를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.');
+  }
+  if (!response.ok) throw new VideoCheckError('검색 결과의 재생 가능 여부를 확인하지 못했어요. API 키나 할당량을 확인해 주세요.');
+  let data;
+  try { data = await response.json(); }
+  catch { throw new VideoCheckError('검색 결과의 재생 가능 여부를 읽지 못했어요.'); }
+  if (!Array.isArray(data.items)) throw new VideoCheckError('검색 결과의 재생 가능 여부가 올바르지 않아요.');
+  const videos = new Map(data.items.filter((video) => typeof video.id === 'string').map((video) => [video.id, video]));
+  return items.filter((item) => !videoPlaybackRestriction(videos.get(item.videoId))).map((item) => {
+    const seconds = durationSeconds(videos.get(item.videoId).contentDetails?.duration);
+    return seconds === null ? item : { ...item, durationSeconds: seconds };
+  });
 }
 
 async function searchYouTubeVideos(query, pageToken, apiKey, fetchVideo) {
@@ -166,7 +177,7 @@ async function searchYouTubeVideos(query, pageToken, apiKey, fetchVideo) {
   try { data = await response.json(); }
   catch { throw new VideoCheckError('YouTube 검색 결과를 읽지 못했어요.'); }
   if (!Array.isArray(data.items)) throw new VideoCheckError('YouTube 검색 결과가 올바르지 않아요.');
-  const items = data.items.filter((item) => /^[A-Za-z0-9_-]{11}$/.test(item.id?.videoId || ''))
+  const candidates = data.items.filter((item) => /^[A-Za-z0-9_-]{11}$/.test(item.id?.videoId || ''))
     .map((item) => ({
       videoId: item.id.videoId,
       title: String(item.snippet?.title || `유튜브 영상 · ${item.id.videoId}`).slice(0, 120),
@@ -175,11 +186,8 @@ async function searchYouTubeVideos(query, pageToken, apiKey, fetchVideo) {
     .map((item, index) => ({ item, index, score: musicResultScore(item, query) }))
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .map(({ item }) => item);
-  const { durations, unavailable } = await searchVideoDurations(items.map((item) => item.videoId), apiKey, fetchVideo);
-  for (const item of items) {
-    if (durations.has(item.videoId)) item.durationSeconds = durations.get(item.videoId);
-  }
-  return { items, nextPageToken: typeof data.nextPageToken === 'string' ? data.nextPageToken : null, durationUnavailable: unavailable };
+  const items = await searchPlayableVideos(candidates, apiKey, fetchVideo);
+  return { items, nextPageToken: typeof data.nextPageToken === 'string' ? data.nextPageToken : null };
 }
 
 function musicResultScore(item, query) {
@@ -681,13 +689,6 @@ export function createAppServer({ storagePath = null, youtubeApiKey = null, fetc
           const cacheKey = JSON.stringify([query.toLocaleLowerCase(), pageToken]);
           const cached = searchCache.get(cacheKey);
           if (cached && Date.now() - cached.at < 30 * 60_000) {
-            if (cached.result.durationUnavailable) {
-              const { durations, unavailable } = await searchVideoDurations(cached.result.items.map((item) => item.videoId), apiKey, fetchVideo);
-              for (const item of cached.result.items) {
-                if (durations.has(item.videoId)) item.durationSeconds = durations.get(item.videoId);
-              }
-              cached.result.durationUnavailable = unavailable;
-            }
             return json(response, 200, cached.result);
           }
           try {

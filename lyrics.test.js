@@ -71,6 +71,48 @@ test('lyrics matching rejects a different artist and ambiguous title', () => {
   assert.equal(vm.runInContext('bestLyricsRecord(martiniRecords, lyricsSignature("Martini Blue"), 195).artistName', context), 'DPR LIVE');
 });
 
+test('varied YouTube title examples produce usable artist and track names', () => {
+  const { context } = lyricsContext(async () => {});
+  const examples = [
+    ['박재정 - 계절의 끝 / Lyrics / 가사', '박재정', '계절의 끝'],
+    ['박재정 - 계절의 끝 / Kpop / Lyrics / 가사', '박재정', '계절의 끝'],
+    ['Vaundy - 괴수의 꽃노래(怪獣の花唄) [가사/발음/해석]', 'Vaundy', '괴수의 꽃노래(怪獣の花唄)'],
+    ["RESCENE (리센느) 'Runaway' Official MV", 'RESCENE (리센느)', 'Runaway'],
+    ['뉴진스 (NEWJEANS)－「OMG」 [LYRICS] 가사 한국어', '뉴진스 (NEWJEANS)', 'OMG'],
+    ['YOASOBI - 밤을 달리다 [가사/해석]', 'YOASOBI', '밤을 달리다'],
+    ['AC/DC - Back in Black (Official Audio)', 'AC/DC', 'Back in Black'],
+    ['Artist - Love / Hate', 'Artist', 'Love / Hate'],
+  ];
+  for (const [title, artist, track] of examples) {
+    context.title = title;
+    const signature = vm.runInContext('lyricsSignature(title)', context);
+    assert.equal(signature.artist, artist, title);
+    assert.equal(signature.track, track, title);
+  }
+  context.records = [
+    { trackName: 'OMG', artistName: 'NewJeans', duration: 212, plainLyrics: 'Right' },
+    { trackName: 'OMG', artistName: 'Cover Band', duration: 212, plainLyrics: 'Wrong' },
+  ];
+  assert.equal(vm.runInContext('bestLyricsRecord(records, lyricsSignature("뉴진스 (NEWJEANS)－「OMG」 [LYRICS] 가사 한국어"), 212).artistName', context), 'NewJeans');
+  assert.equal(vm.runInContext('searchLyricsArtist("뉴진스 (NEWJEANS)")', context), 'NEWJEANS');
+});
+
+test('a slash-tagged video searches the clean song name', async () => {
+  const requests = [];
+  const { context, elements } = lyricsContext(async (url) => {
+    requests.push(url);
+    if (url.startsWith('https://api.lrcmux.dev/')) return { ok: true, json: async () => [] };
+    const query = new URL(url).searchParams;
+    return { ok: true, status: 200, json: async () =>
+      query.get('track_name') === '계절의 끝' && query.get('artist_name') === '박재정'
+        ? [{ trackName: '계절의 끝', artistName: '박재정', duration: 326, plainLyrics: '계절의 끝에서 다시 만난 우리 이야기' }]
+        : [] };
+  });
+  await context.window.musicLyrics.setTrack('track-1', '박재정 - 계절의 끝 / Lyrics / 가사', 326);
+  assert.equal(requests.length, 1);
+  assert.equal(elements.get('lyricsLines').children[0].textContent, '계절의 끝에서 다시 만난 우리 이야기');
+});
+
 test('timed lyrics follow the current playback position', async () => {
   const requests = [];
   const { context, elements } = lyricsContext(async (url, options) => {

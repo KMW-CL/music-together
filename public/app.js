@@ -55,16 +55,21 @@ let searchNextPageToken = null;
 let searchRequestId = 0;
 let searchLoading = false;
 let searchedQuery = '';
-let searchDurationUnavailable = false;
+let activeSearchProbeCancel = null;
 let playlistDrag = null;
 let playlistSearchTrackId = null;
 const volumeStorageKey = 'music-together-volume';
 const volumeRestoreStorageKey = 'music-together-volume-before-mute';
 const videoSizeStorageKey = 'music-together-compact-video';
 const recentRoomStorageKey = 'music-together-recent-rooms';
+const blockedSearchStorageKey = 'music-together-blocked-search-videos';
+const blockedSearchTtlMs = 7 * 24 * 60 * 60_000;
+// The YouTube API reports this video as embeddable, but this room's iframe rejects it.
+const knownEmbedBlockedVideoIds = new Set(['Ocq3Y6DH4D0']);
 const maxRecentRooms = 8;
 const playlistActions = new Set(['add', 'load', 'select', 'move', 'remove', 'repeat', 'repeat-one', 'shuffle', 'metadata']);
 let recentRooms = readRecentRooms();
+let blockedSearchVideos = readBlockedSearchVideos();
 let localVolume = readLocalVolume();
 let volumeBeforeMute = readVolumeBeforeMute(localVolume);
 let compactVideo = false;
@@ -133,6 +138,28 @@ function showToast(message) {
   ui.toast.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => ui.toast.classList.remove('show'), 3_200);
+}
+
+function readBlockedSearchVideos() {
+  try {
+    const entries = JSON.parse(localStorage.getItem(blockedSearchStorageKey) || '[]');
+    if (!Array.isArray(entries)) return new Map();
+    return new Map(entries.filter(([videoId, expiresAt]) =>
+      /^[A-Za-z0-9_-]{11}$/.test(videoId) && Number.isFinite(expiresAt) && expiresAt > Date.now()));
+  } catch { return new Map(); }
+}
+
+function isBlockedSearchVideo(videoId) {
+  return knownEmbedBlockedVideoIds.has(videoId) || (blockedSearchVideos.get(videoId) || 0) > Date.now();
+}
+
+function rememberEmbedBlockedVideo(videoId) {
+  blockedSearchVideos.set(videoId, Date.now() + blockedSearchTtlMs);
+  try { localStorage.setItem(blockedSearchStorageKey, JSON.stringify([...blockedSearchVideos])); }
+  catch { /* Keep the block for this tab. */ }
+  searchItems = searchItems.filter((item) => !isBlockedSearchVideo(item.videoId));
+  searchPage = Math.min(searchPage, Math.max(0, Math.ceil(searchItems.length / searchPageSize) - 1));
+  if (ui.searchDialog.open) renderSearchPage();
 }
 
 function formatTime(seconds) {
@@ -314,12 +341,12 @@ function renderSearchResults(items) {
 
 function resetSearchResults() {
   searchRequestId++;
+  activeSearchProbeCancel?.();
   searchItems = [];
   searchPage = 0;
   searchNextPageToken = null;
   searchLoading = false;
   searchedQuery = '';
-  searchDurationUnavailable = false;
   ui.searchResults.replaceChildren();
   ui.searchPagination.classList.add('hidden');
   ui.searchButton.disabled = !precheckEnabled;
@@ -341,8 +368,10 @@ function renderSearchPage() {
   const end = Math.min(start + searchPageSize, searchItems.length);
   renderSearchResults(searchItems.slice(start, end));
   ui.searchStatus.textContent = searchItems.length
-    ? `${searchPage + 1}페이지 · ${start + 1}~${end}번째 결과 · 곡을 고르면 재생 가능 여부를 확인합니다.${searchDurationUnavailable ? ' 영상 길이를 불러오지 못했어요. 다시 검색해 주세요.' : ''}`
-    : '검색 결과가 없어요. 다른 검색어를 입력해 보세요.';
+    ? `${searchPage + 1}페이지 · ${start + 1}~${end}번째 결과 · 추가할 때 재생 가능 여부를 확인합니다.`
+    : searchNextPageToken
+      ? '표시할 곡이 없어요. 다음 검색 결과를 확인해 보세요.'
+      : '검색 결과가 없어요. 다른 검색어를 입력해 보세요.';
   const hasNext = end < searchItems.length || Boolean(searchNextPageToken);
   ui.searchPagination.classList.toggle('hidden', searchPage === 0 && !hasNext);
   ui.searchPrevious.disabled = searchLoading || searchPage === 0;
@@ -551,7 +580,7 @@ function playerErrorMessage(code) {
   return { title: '이 영상을 재생하지 못했어요', description: '유튜브에서 영상을 확인하거나 다른 링크를 선택해 주세요.' };
 }
 
-async function probeEmbeddedPlayback(videoId) {
+async function probeEmbeddedPlayback(videoId, timeoutMs = 8_000) {
   if (!window.YT?.Player) return { allowed: false, reason: 'YouTube 플레이어를 아직 불러오지 못했어요. 잠시 후 다시 시도해 주세요.' };
   const inSearchDialog = ui.searchDialog.open;
   const preview = inSearchDialog ? ui.searchProbePreview : ui.probePreview;
@@ -566,12 +595,13 @@ async function probeEmbeddedPlayback(videoId) {
     let probe = null;
     let settled = false;
     let readyTimer = null;
-    const timeout = setTimeout(() => finish({ allowed: false, reason: '삽입 재생 확인 시간이 초과됐어요. 다시 시도해 주세요.' }), 8_000);
+    const timeout = setTimeout(() => finish({ allowed: false, reason: '삽입 재생 확인 시간이 초과됐어요. 다시 시도해 주세요.' }), timeoutMs);
     function finish(result) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
       clearTimeout(readyTimer);
+      if (activeSearchProbeCancel === cancel) activeSearchProbeCancel = null;
       try { probe?.destroy(); } catch { /* The iframe may not have finished loading. */ }
       $(mountId)?.remove();
       const placeholder = document.createElement('div');
@@ -580,6 +610,8 @@ async function probeEmbeddedPlayback(videoId) {
       preview.classList.add('hidden');
       resolve(result);
     }
+    const cancel = () => finish({ allowed: false, cancelled: true, reason: '삽입 재생 확인을 취소했어요.' });
+    if (inSearchDialog) activeSearchProbeCancel = cancel;
     try {
       probe = new YT.Player(mount, {
         width: 200, height: 200, videoId,
@@ -594,7 +626,7 @@ async function probeEmbeddedPlayback(videoId) {
             const reason = [100, 101, 150].includes(event.data)
               ? '이 영상은 이 사이트의 삽입 플레이어에서 재생할 수 없어요. 목록에 추가하지 않았습니다.'
               : '이 브라우저에서 영상 재생을 확인하지 못했어요. 목록에 추가하지 않았습니다.';
-            finish({ allowed: false, reason });
+            finish({ allowed: false, reason, errorCode: event.data });
           },
         },
       });
@@ -669,6 +701,7 @@ function ensurePlayer() {
       },
       onError(event) {
         if (event.target !== player) return;
+        if ([100, 101, 150].includes(event.data) && state?.videoId) rememberEmbedBlockedVideo(state.videoId);
         playerError = { code: event.data, ...playerErrorMessage(event.data) };
         render();
         if (!skipUnplayableTrack()) showToast(playerError.title);
@@ -885,7 +918,15 @@ ui.openSearch.addEventListener('click', () => {
   ui.searchQuery.focus();
 });
 ui.closeSearch.addEventListener('click', () => ui.searchDialog.close());
-ui.searchDialog.addEventListener('close', () => document.body.classList.remove('search-dialog-open'));
+ui.searchDialog.addEventListener('close', () => {
+  document.body.classList.remove('search-dialog-open');
+  searchRequestId++;
+  activeSearchProbeCancel?.();
+  searchLoading = false;
+  ui.searchButton.disabled = !precheckEnabled;
+  ui.searchButton.innerHTML = '검색하기 <span aria-hidden="true">⌕</span>';
+  if (searchItems.length) renderSearchPage();
+});
 ui.searchDialog.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     event.preventDefault();
@@ -917,23 +958,24 @@ ui.searchForm.addEventListener('submit', async (event) => {
   ui.searchButton.disabled = true;
   ui.searchButton.textContent = '검색 중…';
   ui.searchStatus.textContent = 'YouTube에서 곡을 찾는 중…';
+  let errorMessage = null;
   try {
     const result = await api(`/api/rooms/${id}/search`, {
       method: 'POST', body: JSON.stringify({ query }),
     });
     if (requestId !== searchRequestId) return;
-    searchItems = result.items;
+    searchItems = result.items.filter((item) => !isBlockedSearchVideo(item.videoId));
     searchNextPageToken = result.nextPageToken || null;
-    searchDurationUnavailable = Boolean(result.durationUnavailable);
     renderSearchPage();
   } catch (error) {
-    if (requestId === searchRequestId) ui.searchStatus.textContent = error.message;
+    errorMessage = error.message;
   } finally {
     if (requestId === searchRequestId) {
       searchLoading = false;
       ui.searchButton.disabled = !precheckEnabled;
       ui.searchButton.innerHTML = '검색하기 <span aria-hidden="true">⌕</span>';
-      if (searchItems.length) renderSearchPage();
+      renderSearchPage();
+      if (errorMessage) ui.searchStatus.textContent = errorMessage;
     }
   }
 });
@@ -954,30 +996,30 @@ ui.searchNext.addEventListener('click', async () => {
     return;
   }
   if (!searchNextPageToken) return;
-  const pageToken = searchNextPageToken;
   const requestId = searchRequestId;
   const id = roomId;
   searchLoading = true;
   renderSearchPage();
-  ui.searchStatus.textContent = '다음 검색 결과를 불러오는 중…';
+  let errorMessage = null;
   try {
+    const pageToken = searchNextPageToken;
+    ui.searchStatus.textContent = '다음 검색 결과를 불러오는 중…';
     const result = await api(`/api/rooms/${id}/search`, {
       method: 'POST', body: JSON.stringify({ query: searchedQuery, pageToken }),
     });
     if (requestId !== searchRequestId) return;
-    const seen = new Set(searchItems.map((item) => item.videoId));
-    searchItems.push(...result.items.filter((item) => !seen.has(item.videoId)));
+    const seenIds = new Set(searchItems.map((item) => item.videoId));
+    searchItems.push(...result.items.filter((item) => !seenIds.has(item.videoId) && !isBlockedSearchVideo(item.videoId)));
     searchNextPageToken = result.nextPageToken && result.nextPageToken !== pageToken ? result.nextPageToken : null;
-    searchDurationUnavailable = Boolean(result.durationUnavailable);
     if (targetStart < searchItems.length) searchPage = Math.floor(targetStart / searchPageSize);
     renderSearchPage();
   } catch (error) {
-    if (requestId === searchRequestId) ui.searchStatus.textContent = error.message;
+    errorMessage = error.message;
   } finally {
     if (requestId === searchRequestId) {
       searchLoading = false;
-      ui.searchPrevious.disabled = searchPage === 0;
-      ui.searchNext.disabled = (searchPage + 1) * searchPageSize >= searchItems.length && !searchNextPageToken;
+      renderSearchPage();
+      if (errorMessage) ui.searchStatus.textContent = errorMessage;
     }
   }
 });
@@ -992,7 +1034,10 @@ async function addVideo(videoId, title, button) {
   button.textContent = '재생 확인 중…';
   try {
     const probe = await probeEmbeddedPlayback(videoId);
-    if (!probe.allowed) return showToast(probe.reason);
+    if (!probe.allowed) {
+      if ([100, 101, 150].includes(probe.errorCode)) rememberEmbedBlockedVideo(videoId);
+      return showToast(probe.reason);
+    }
     button.textContent = precheckEnabled ? 'YouTube 정보 확인 중…' : '곡 추가 중…';
     const result = await sendControl('add', { videoId, title });
     if (result) {

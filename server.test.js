@@ -609,19 +609,20 @@ test('a player can report duration so the server advances a room without an API 
 
 test('any room member can search embeddable videos without exposing the API key', async () => {
   let searches = 0;
-  let durationRequests = 0;
+  let videoRequests = 0;
   const searchServer = createAppServer({
     youtubeApiKey: 'test-key',
     fetchVideo: async (url, options) => {
       const request = new URL(url);
       if (request.pathname === '/youtube/v3/videos') {
-        assert.equal(request.searchParams.get('part'), 'contentDetails');
+        assert.equal(request.searchParams.get('part'), 'status,contentDetails');
         assert.equal(request.searchParams.has('key'), false);
         assert.equal(options.headers['x-goog-api-key'], 'test-key');
         const ids = request.searchParams.get('id').split(',');
-        durationRequests++;
+        videoRequests++;
         return { ok: true, json: async () => ({ items: ids.map((id, index) => ({
-          id, contentDetails: { duration: index === 0 ? 'PT3M42S' : index === 1 ? 'PT1H2M3S' : 'PT0S' },
+          id, status: { embeddable: true, privacyStatus: 'public', uploadStatus: 'processed' },
+          contentDetails: { duration: index === 0 ? 'PT3M42S' : index === 1 ? 'PT1H2M3S' : 'PT0S' },
         })) }) };
       }
       assert.equal(request.pathname, '/youtube/v3/search');
@@ -675,21 +676,57 @@ test('any room member can search embeddable videos without exposing the API key'
     assert.equal(JSON.stringify(result.body).includes('test-key'), false);
     await post(endpoint, { query: 'jazz piano' });
     assert.equal(searches, 1);
-    assert.equal(durationRequests, 1, 'cached search results should reuse duration metadata');
+    assert.equal(videoRequests, 1, 'cached search results should reuse verified video metadata');
     const secondPage = await post(endpoint, { query: 'jazz piano', pageToken: 'PAGE_TWO' });
     assert.deepEqual(secondPage.body.items, [{ videoId: 'ZZZZZZZZZZZ', title: 'Next song', channel: 'Test channel', durationSeconds: 222 }]);
     assert.equal(secondPage.body.nextPageToken, null);
     await post(endpoint, { query: 'jazz piano', pageToken: 'PAGE_TWO' });
     assert.equal(searches, 2);
-    assert.equal(durationRequests, 2);
+    assert.equal(videoRequests, 2);
   } finally {
     await new Promise((resolve) => searchServer.close(resolve));
   }
 });
 
-test('cached search results retry duration metadata after a temporary failure', async () => {
+test('search hides videos that would fail the playlist precheck', async () => {
+  const ids = ['AAAAAAAAAAA', 'BBBBBBBBBBB', 'CCCCCCCCCCC', 'DDDDDDDDDDD', 'EEEEEEEEEEE', 'FFFFFFFFFFF', 'GGGGGGGGGGG'];
+  const searchServer = createAppServer({
+    youtubeApiKey: 'test-key',
+    fetchVideo: async (url) => {
+      if (new URL(url).pathname === '/youtube/v3/search') {
+        return { ok: true, json: async () => ({ items: ids.map((videoId) => ({
+          id: { videoId }, snippet: { title: videoId, channelTitle: 'Artist' },
+        })) }) };
+      }
+      return { ok: true, json: async () => ({ items: [
+        { id: ids[0], status: { embeddable: true, privacyStatus: 'public', uploadStatus: 'processed' }, contentDetails: { duration: 'PT2M' } },
+        { id: ids[1], status: { embeddable: false } },
+        { id: ids[2], status: { embeddable: true, privacyStatus: 'private' } },
+        { id: ids[3], status: { embeddable: true }, contentDetails: { contentRating: { ytRating: 'ytAgeRestricted' } } },
+        { id: ids[4], status: { embeddable: true, uploadStatus: 'failed' } },
+        { id: ids[6], status: { privacyStatus: 'public' } },
+      ] }) };
+    },
+  });
+  await new Promise((resolve) => searchServer.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${searchServer.address().port}`;
+  try {
+    const room = await fetch(`${origin}/api/rooms`, { method: 'POST' }).then((response) => response.json());
+    const response = await fetch(`${origin}/api/rooms/${room.id}/search`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'artist song' }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).items, [
+      { videoId: ids[0], title: ids[0], channel: 'Artist', durationSeconds: 120 },
+    ]);
+  } finally {
+    await new Promise((resolve) => searchServer.close(resolve));
+  }
+});
+
+test('search does not show or cache videos when playback verification fails', async () => {
   let searches = 0;
-  let durationRequests = 0;
+  let videoRequests = 0;
   const searchServer = createAppServer({
     youtubeApiKey: 'test-key',
     fetchVideo: async (url) => {
@@ -699,10 +736,10 @@ test('cached search results retry duration metadata after a temporary failure', 
           { id: { videoId: 'AAAAAAAAAAA' }, snippet: { title: 'Song', channelTitle: 'Artist' } },
         ] }) };
       }
-      durationRequests++;
-      if (durationRequests === 1) return { ok: false, status: 503 };
+      videoRequests++;
+      if (videoRequests === 1) return { ok: false, status: 503 };
       return { ok: true, json: async () => ({ items: [
-        { id: 'AAAAAAAAAAA', contentDetails: { duration: 'PT4M5S' } },
+        { id: 'AAAAAAAAAAA', status: { embeddable: true }, contentDetails: { duration: 'PT4M5S' } },
       ] }) };
     },
   });
@@ -712,15 +749,15 @@ test('cached search results retry duration metadata after a temporary failure', 
     const room = await fetch(`${origin}/api/rooms`, { method: 'POST' }).then((response) => response.json());
     const search = async () => fetch(`${origin}/api/rooms/${room.id}/search`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'artist song' }),
-    }).then((response) => response.json());
+    });
     const first = await search();
-    assert.equal(first.durationUnavailable, true);
-    assert.equal('durationSeconds' in first.items[0], false);
+    assert.equal(first.status, 503);
+    assert.match((await first.json()).error, /재생 가능 여부/);
     const second = await search();
-    assert.equal(second.durationUnavailable, false);
-    assert.equal(second.items[0].durationSeconds, 245);
-    assert.equal(searches, 1);
-    assert.equal(durationRequests, 2);
+    assert.equal(second.status, 200);
+    assert.equal((await second.json()).items[0].durationSeconds, 245);
+    assert.equal(searches, 2);
+    assert.equal(videoRequests, 2);
   } finally {
     await new Promise((resolve) => searchServer.close(resolve));
   }
@@ -729,11 +766,13 @@ test('cached search results retry duration metadata after a temporary failure', 
 test('music search puts an artist official MV ahead of unrelated coverage', async () => {
   const searchServer = createAppServer({
     youtubeApiKey: 'test-key',
-    fetchVideo: async () => ({ ok: true, json: async () => ({ items: [
-      { id: { videoId: 'AAAAAAAAAAA' }, snippet: { title: 'RESCENE 레센느 LOVE ATTACK 현장 소식', channelTitle: '방송국' } },
-      { id: { videoId: 'BBBBBBBBBBB' }, snippet: { title: '레센느 인터뷰와 티저', channelTitle: '방송국' } },
-      { id: { videoId: 'CCCCCCCCCCC' }, snippet: { title: 'RESCENE (레센느) - LOVE ATTACK Official MV', channelTitle: 'RESCENE' } },
-    ] }) }),
+    fetchVideo: async (url) => ({ ok: true, json: async () => ({ items: new URL(url).pathname === '/youtube/v3/videos'
+      ? ['AAAAAAAAAAA', 'BBBBBBBBBBB', 'CCCCCCCCCCC'].map((id) => ({ id, status: { embeddable: true } }))
+      : [
+        { id: { videoId: 'AAAAAAAAAAA' }, snippet: { title: 'RESCENE 레센느 LOVE ATTACK 현장 소식', channelTitle: '방송국' } },
+        { id: { videoId: 'BBBBBBBBBBB' }, snippet: { title: '레센느 인터뷰와 티저', channelTitle: '방송국' } },
+        { id: { videoId: 'CCCCCCCCCCC' }, snippet: { title: 'RESCENE (레센느) - LOVE ATTACK Official MV', channelTitle: 'RESCENE' } },
+      ] }) }),
   });
   await new Promise((resolve) => searchServer.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${searchServer.address().port}`;

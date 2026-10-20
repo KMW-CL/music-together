@@ -256,7 +256,7 @@ a:hover { color: var(--primary); text-decoration: underline; text-underline-offs
 .search-dialog .search-results button:hover:not(:disabled) { background: var(--primary-hover); transform: scale(1.04); }
 .search-pagination button { min-height: 44px; padding: 8px 20px; font-size: 14px; }
 .search-pagination span { color: var(--muted); font-size: 12px; }
-.search-dialog .probe-preview:not(.hidden) { background: rgba(31, 31, 31, .96); border-radius: 6px; }
+.search-dialog .probe-preview:not(.hidden) { top: 64px; background: rgba(31, 31, 31, .96); border-radius: 6px; }
 
 footer { margin: 0 -32px; padding: 16px 24px; background: linear-gradient(90deg, #8e69a3, #c02030 50%, #183060); border: 0; border-radius: 4px 4px 0 0; color: var(--text); font-family: var(--font-accent); font-size: 12px; letter-spacing: .08em; box-shadow: var(--overlay-shadow); }
 footer span { color: var(--text); }

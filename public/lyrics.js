@@ -17,18 +17,23 @@ let lyricsNextRequestAt = 0;
 let lyricsRateLimitedUntil = 0;
 
 function cleanLyricsTitle(title) {
-  return String(title || '')
+  return String(title || '').normalize('NFKC')
     .replace(/\s*[([][^\])]*(?:official|music video|mv|lyric|audio|뮤직비디오|가사|공식 영상|4k|hd)[^\])]*[)\]]/gi, '')
     .replace(/\s+(?:official\s*)?(?:m\/?v|music\s*video|video|lyrics?\s*video|audio)(?:\s*[-–—].*)?\s*$/gi, '')
     .replace(/\s+[-–—]\s*\[[^\]]+\]\s*(?:ep|album|single)?\s*$/gi, '')
+    .replace(/(?:\s*[/|｜ㅣ]\s*(?:k-?pop|lyrics?|가사))+\s*$/gi, '')
+    .replace(/\s+(?:가사(?:\s+(?:한국어|한글))?|lyrics?)\s*$/i, '')
     .trim();
 }
 
 function lyricsSignature(title) {
   const cleaned = cleanLyricsTitle(title);
-  const pair = cleaned.match(/(?:^|[:：]\s*)([^:：]+?)\s+[-–—]\s+(.+)$/);
-  if (pair) return { artist: pair[1].trim(), track: pair[2].trim() };
-  const quoted = cleaned.match(/^(.+?)\s+['"“‘]([^'"”’]+)['"”’]$/);
+  const pair = cleaned.match(/(?:^|[:：]\s*)([^:：]+?)(?:\s+[-–—]\s+|\s*[-–—]\s*(?=['"“‘「『]))(.+)$/u);
+  if (pair) return {
+    artist: pair[1].trim(),
+    track: pair[2].trim().replace(/^['"“‘「『](.+?)['"”’」』]$/u, '$1'),
+  };
+  const quoted = cleaned.match(/^(.+?)\s+['"“‘「『]([^'"”’」』]+)['"”’」』]$/u);
   return quoted ? { artist: quoted[1].trim(), track: quoted[2].trim() } : { artist: '', track: cleaned };
 }
 
@@ -40,6 +45,16 @@ function normalizedLyricsName(value) {
 
 function normalizedLyricsArtist(value) {
   return normalizedLyricsName(String(value || '').replace(/\s*[-–—]\s*Topic\s*$/i, ''));
+}
+
+function lyricsArtistVariants(artist) {
+  const pair = String(artist || '').match(/^(.+?)\s*[(（]\s*([^)）]+)\s*[)）]$/u);
+  return pair ? [pair[1].trim(), pair[2].trim()] : [artist];
+}
+
+function searchLyricsArtist(artist) {
+  const variants = lyricsArtistVariants(artist);
+  return variants.find((variant) => /[A-Za-z]/.test(variant)) || variants[0];
 }
 
 function koreanLyricsPreference(record) {
@@ -62,14 +77,14 @@ function lyricsMatchScore(record, signature, duration) {
   const actualTitle = normalizedLyricsName(record.trackName || record.name);
   if (!expectedTitle || !actualTitle) return -1;
   if (expectedTitle !== actualTitle) return -1;
-  const expectedArtist = normalizedLyricsArtist(signature.artist);
-  const actualArtist = normalizedLyricsArtist(record.artistName);
-  if (expectedArtist && actualArtist !== expectedArtist
-    && !actualArtist.startsWith(`${expectedArtist} `)
-    && !expectedArtist.startsWith(`${actualArtist} `)) return -1;
+  const expectedArtists = lyricsArtistVariants(signature.artist).map(normalizedLyricsArtist).filter(Boolean);
+  const actualArtists = lyricsArtistVariants(record.artistName).map(normalizedLyricsArtist).filter(Boolean);
+  if (expectedArtists.length && !expectedArtists.some((expectedArtist) => actualArtists.some((actualArtist) =>
+    actualArtist === expectedArtist || actualArtist.startsWith(`${expectedArtist} `)
+      || expectedArtist.startsWith(`${actualArtist} `)))) return -1;
   const difference = Number.isFinite(record.duration) && duration > 0 ? Math.abs(record.duration - duration) : 0;
   if (difference > 60) return -1;
-  return (actualTitle === expectedTitle ? 12 : 5) + (expectedArtist ? 8 : 0)
+  return (actualTitle === expectedTitle ? 12 : 5) + (expectedArtists.length ? 8 : 0)
     + (difference <= 8 ? 2 : 0) + (record.syncedLyrics ? 2 : 0)
     + (record.plainLyrics ? 1 : 0) + koreanLyricsPreference(record)
     + japaneseLyricsPreference(record, signature) - Math.min(5, difference / 10);
@@ -112,8 +127,9 @@ async function lyricsSearch(parameters, signal) {
 }
 
 async function lookupLyrics(signature, duration, signal) {
+  const artist = searchLyricsArtist(signature.artist);
   const search = signature.artist
-    ? { track_name: signature.track, artist_name: signature.artist }
+    ? { track_name: signature.track, artist_name: artist }
     : { q: signature.track };
   let match = null;
   let searchError = null;
@@ -128,7 +144,7 @@ async function lookupLyrics(signature, duration, signal) {
   }
   if (signature.artist && !koreanLyricsPreference(match || {}) && !signal.aborted) {
     try {
-      const query = new URLSearchParams({ track_name: signature.track, artist_name: signature.artist });
+      const query = new URLSearchParams({ track_name: signature.track, artist_name: artist });
       const response = await fetch(`https://api.lrcmux.dev/compat/lrclib/api/search?${query}`, { signal });
       if (response.ok) {
         const koreanMatch = bestLyricsRecord(await response.json(), signature, duration);
