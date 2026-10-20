@@ -392,6 +392,7 @@ function leaveRoom() {
   advancingTrackId = null;
   destroyPlayer();
   ui.room.classList.add('hidden');
+  updateBackToPlayerVisibility();
   ui.landing.classList.remove('hidden');
   renderRecentRooms();
   history.pushState({}, '', location.pathname);
@@ -767,6 +768,7 @@ async function enterRoom(id, createdHostToken = null) {
   ui.searchStatus.textContent = '검색어를 입력해 주세요.';
   ui.landing.classList.add('hidden');
   ui.room.classList.remove('hidden');
+  updateBackToPlayerVisibility();
   ui.code.textContent = `#${id.toUpperCase()}`;
   setConnection(false);
   history.replaceState({}, '', `/?room=${id}`);
@@ -1045,6 +1047,12 @@ ui.playlistSearchForm.addEventListener('submit', (event) => {
 });
 ui.playlistSearchPrevious.addEventListener('click', () => jumpToPlaylistMatch(-1));
 ui.playlistSearchNext.addEventListener('click', () => jumpToPlaylistMatch(1));
+function updateBackToPlayerVisibility() {
+  const playerAboveViewport = ui.playerPanel.getBoundingClientRect().bottom <= 0;
+  ui.backToPlayer.classList.toggle('hidden', ui.room.classList.contains('hidden') || !playerAboveViewport);
+}
+window.addEventListener('scroll', updateBackToPlayerVisibility, { passive: true });
+window.addEventListener('resize', updateBackToPlayerVisibility);
 ui.backToPlayer.addEventListener('click', () => {
   ui.playerPanel.scrollIntoView({
     behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'auto' : 'smooth',

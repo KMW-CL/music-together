@@ -113,6 +113,9 @@ a:hover { color: var(--primary); text-decoration: underline; text-underline-offs
 .player-panel:hover, .side-card:hover, .library-card:hover { box-shadow: var(--card-shadow); }
 .player-panel, .library-card { padding: 24px; }
 .player-panel { scroll-margin-top: 16px; }
+.back-to-player-fab { position: fixed; right: calc(24px + env(safe-area-inset-right)); bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 3; min-height: 48px; padding: 12px 20px; border: 0; border-radius: 9999px; background: var(--primary); color: var(--black); box-shadow: var(--overlay-shadow); font-size: 14px; font-weight: 700; }
+.back-to-player-fab:hover { background: var(--primary-hover); transform: scale(1.04); }
+.back-to-player-fab:active { background: var(--primary-active); transform: scale(1); }
 .panel-label { color: var(--muted); font-family: var(--font-accent); font-size: 12px; margin: 0 0 16px; letter-spacing: .08em; }
 .panel-header-actions { gap: 8px; }
 .panel-header-actions .panel-icon-button { width: 44px; height: 44px; min-width: 44px; min-height: 44px; display: grid; place-items: center; padding: 0; margin: 0; border: 1px solid var(--border); border-radius: 9999px; background: var(--highlight); color: var(--text); text-decoration: none; }
@@ -197,9 +200,6 @@ a:hover { color: var(--primary); text-decoration: underline; text-underline-offs
 .playlist-mode-button[aria-pressed="true"]:hover { border-color: var(--primary-hover); background: var(--primary-hover); color: var(--black); }
 .library-help { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 12px 0 20px; }
 .playlist-find { position: sticky; top: 8px; z-index: 2; margin: 0 0 16px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--elevated); box-shadow: var(--card-shadow); }
-.playlist-find-topline { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-.playlist-find .playlist-find-topline label { margin-bottom: 0; }
-.playlist-find .playlist-back-to-player { padding: 8px 16px; white-space: nowrap; }
 .playlist-find label { display: block; margin-bottom: 8px; color: var(--text); font-size: 12px; font-weight: 700; }
 .playlist-find-controls { display: flex; align-items: center; gap: 8px; }
 .playlist-find input { flex: 1; min-width: 0; min-height: 42px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--background); color: var(--text); font-size: 14px; }
@@ -293,6 +293,7 @@ footer span { color: var(--text); }
   .playlist-heading-actions { width: 100%; justify-content: space-between; }
   .playlist-mode-button { min-height: 44px; padding: 8px 12px; }
   .playlist-find { top: 0; padding: 10px; }
+  .back-to-player-fab { right: calc(16px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); }
   .playlist-find-controls { flex-wrap: wrap; }
   .playlist-find input { flex-basis: calc(100% - 80px); }
   .playlist-find-navigation { margin-left: auto; }
