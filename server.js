@@ -549,6 +549,8 @@ async function serveFile(url, response) {
     '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
     '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
     '/design.css': ['design.css', 'text/css; charset=utf-8'],
+    '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
+    '/lyrics.js': ['lyrics.js', 'text/javascript; charset=utf-8'],
   };
   const entry = files[url.pathname];
   if (!entry) return json(response, 404, { error: '페이지를 찾을 수 없어요.' });

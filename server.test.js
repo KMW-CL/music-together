@@ -67,6 +67,9 @@ test('serves the application', async () => {
   const response = await fetch(base);
   assert.equal(response.status, 200);
   assert.match(await response.text(), /music together/);
+  const lyrics = await fetch(`${base}/lyrics.js`);
+  assert.equal(lyrics.status, 200);
+  assert.match(lyrics.headers.get('content-type'), /text\/javascript/);
 });
 
 test('live stream reports connected listeners and removes them on disconnect', async () => {

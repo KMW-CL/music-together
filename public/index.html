@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#121212" />
-    <title>music together — 같은 순간, 같은 음악</title>
+    <title>서디미 뮤직</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTciIGZpbGw9IiMxMjEyMTIiLz4KICA8Y2lyY2xlIGN4PSIzMiIgY3k9IjM1IiByPSIxOSIgZmlsbD0iI2ZmZjdlOSIvPgogIDxwYXRoIGQ9Ik0xMiAzNHYtNGEyMCAyMCAwIDAgMSA0MCAwdjQiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzFlZDc2MCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2Utd2lkdGg9IjciLz4KICA8cmVjdCB4PSI4IiB5PSIyOSIgd2lkdGg9IjExIiBoZWlnaHQ9IjIwIiByeD0iNS41IiBmaWxsPSIjMWVkNzYwIi8+CiAgPHJlY3QgeD0iNDUiIHk9IjI5IiB3aWR0aD0iMTEiIGhlaWdodD0iMjAiIHJ4PSI1LjUiIGZpbGw9IiMxZWQ3NjAiLz4KICA8Y2lyY2xlIGN4PSIyNSIgY3k9IjM1IiByPSIyIiBmaWxsPSIjMjQyNDI0Ii8+CiAgPGNpcmNsZSBjeD0iMzkiIGN5PSIzNSIgcj0iMiIgZmlsbD0iIzI0MjQyNCIvPgogIDxwYXRoIGQ9Ik0yNyA0MnE1IDUgMTAgMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMjQyNDI0IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS13aWR0aD0iMi41Ii8+CiAgPGNpcmNsZSBjeD0iMjAiIGN5PSI0MSIgcj0iMi41IiBmaWxsPSIjZjVhYmI5Ii8+CiAgPGNpcmNsZSBjeD0iNDQiIGN5PSI0MSIgcj0iMi41IiBmaWxsPSIjZjVhYmI5Ii8+Cjwvc3ZnPgo=" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
@@ -68,6 +69,12 @@
               <div class="track-details"><div class="track-icon">♫</div><div class="track-text"><strong id="trackTitle">첫 곡을 기다리는 중</strong><span id="trackSubtitle">YouTube에서 재생됩니다</span></div></div>
               <div class="seek-row"><span id="currentTime">0:00</span><input id="seekBar" type="range" min="0" max="100" value="0" disabled aria-label="재생 위치" /><span id="duration">0:00</span></div>
               <div class="controls"><button class="next-button" id="nextTrackButton" type="button" disabled aria-label="다음 곡">⏭</button><div class="volume-row"><button class="volume-mute-button" id="volumeMuteButton" type="button" aria-label="음소거" aria-pressed="false" title="음소거"><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="M3 9v6h4l5 4V5L7 9H3z" fill="currentColor"/><path id="volumeWaves" d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8 8 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path id="volumeMuteSlash" class="hidden" d="m16 9 6 6m0-6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button><input id="volumeControl" type="range" min="0" max="100" value="100" aria-label="내 볼륨" /><output id="volumeValue" for="volumeControl">100%</output></div><span id="playbackLabel">곡을 추가하면 자동으로 재생돼요</span></div>
+              <section class="lyrics-panel" id="lyricsPanel" aria-labelledby="lyricsHeading">
+                <div class="lyrics-heading"><div><span class="card-kicker">LIVE LYRICS</span><h2 id="lyricsHeading">가사</h2></div><button id="lyricsRetry" class="lyrics-retry hidden" type="button">다시 찾기</button></div>
+                <p id="lyricsStatus" class="lyrics-status" role="status">곡을 재생하면 가사를 자동으로 찾아요.</p>
+                <div id="lyricsLines" class="lyrics-lines" aria-label="현재 곡의 가사"></div>
+                <a class="lyrics-credit hidden" id="lyricsCredit" href="https://lrclib.net/" target="_blank" rel="noopener noreferrer">가사 제공: LRCLIB ↗</a>
+              </section>
             </div>
 
             <aside class="side-panel">
@@ -106,6 +113,7 @@
       <div class="probe-preview hidden" id="searchProbePreview"><span>삽입 플레이어 확인 중…</span><div id="searchProbePlayer"></div></div>
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/lyrics.js" defer></script>
     <script src="/app.js" defer></script>
     <script src="https://www.youtube.com/iframe_api" defer></script>
   </body>

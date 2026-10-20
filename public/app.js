@@ -370,6 +370,7 @@ function destroyPlayer() {
 }
 
 function leaveRoom() {
+  window.musicLyrics?.clear();
   if (ui.searchDialog.open) ui.searchDialog.close();
   events?.close();
   events = null;
@@ -394,7 +395,7 @@ function leaveRoom() {
   ui.landing.classList.remove('hidden');
   renderRecentRooms();
   history.pushState({}, '', location.pathname);
-  document.title = 'music together — 같은 순간, 같은 음악';
+  document.title = '서디미 뮤직';
 }
 
 function render() {
@@ -420,6 +421,7 @@ function render() {
   ui.seek.disabled = !hasVideo || !playerReady || Boolean(playerError);
   ui.playbackLabel.textContent = playerError ? '이 영상은 방 안에서 재생할 수 없어요' : !hasVideo ? '곡을 추가하면 자동으로 재생돼요' : (state.playing ? '모두 함께 재생 중' : '재생이 끝났어요');
   ui.trackTitle.textContent = hasVideo ? (state.current?.titleSource === 'fallback' && videoData?.video_id === state.videoId ? videoData.title || state.current.title : state.current?.title || '유튜브 영상') : '첫 곡을 기다리는 중';
+  window.musicLyrics?.setTrack(hasVideo ? state.current?.id : null, hasVideo ? ui.trackTitle.textContent : '', state.current?.durationSeconds);
   ui.trackSubtitle.textContent = playerError ? '방 안에서 재생 불가' : hasVideo ? (state.playing ? '지금 함께 듣는 중' : '재생이 끝났어요') : 'YouTube에서 재생됩니다';
   ui.youtubeLink.classList.toggle('hidden', !hasVideo);
   if (hasVideo) ui.youtubeLink.href = `https://www.youtube.com/watch?v=${state.videoId}`;
@@ -768,7 +770,7 @@ async function enterRoom(id, createdHostToken = null) {
   ui.code.textContent = `#${id.toUpperCase()}`;
   setConnection(false);
   history.replaceState({}, '', `/?room=${id}`);
-  document.title = `음악방 ${id.toUpperCase()} — music together`;
+  document.title = '서디미 뮤직';
   try {
     const room = await api(`/api/rooms/${id}`);
     if (hostToken) {
@@ -1147,6 +1149,7 @@ ui.joinPlay.addEventListener('click', () => {
 ui.seek.addEventListener('input', () => {
   seeking = true;
   ui.currentTime.textContent = formatTime(ui.seek.value);
+  window.musicLyrics?.setTime(Number(ui.seek.value));
 });
 ui.seek.addEventListener('change', () => {
   if (!playerReady) return;
@@ -1179,6 +1182,7 @@ setInterval(() => {
   if (!state?.videoId) return;
   const duration = playerReady ? Math.max(0, player.getDuration() || 0) : 0;
   const current = expectedPosition();
+  window.musicLyrics?.setTime(current);
   if (!seeking) {
     ui.seek.max = Math.max(1, Math.ceil(duration || current + 1));
     ui.seek.value = Math.min(Number(ui.seek.max), current);
@@ -1195,7 +1199,10 @@ setInterval(() => {
         if (!result) durationReportedTrackId = null;
       });
     }
-    if (state.current?.titleSource === 'fallback' && videoData?.video_id === state.videoId && videoData.title) ui.trackTitle.textContent = videoData.title;
+    if (state.current?.titleSource === 'fallback' && videoData?.video_id === state.videoId && videoData.title) {
+      ui.trackTitle.textContent = videoData.title;
+      window.musicLyrics?.setTrack(state.current.id, videoData.title, state.current.durationSeconds || duration);
+    }
     if (canEditPlaylist() && state.current?.titleSource === 'fallback' && videoData?.video_id === state.videoId && videoData.title && metadataReportedTrackId !== state.current.id) {
       metadataReportedTrackId = state.current.id;
       sendControl('metadata', { trackId: state.current.id, title: videoData.title }).then((result) => {

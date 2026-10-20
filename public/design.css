@@ -146,6 +146,18 @@ a:hover { color: var(--primary); text-decoration: underline; text-underline-offs
 .volume-mute-button:hover { background: #333333; border-color: var(--text); }
 .volume-mute-button[aria-pressed="true"] { color: var(--muted); }
 
+.lyrics-panel { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 24px; }
+.lyrics-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.lyrics-heading h2 { color: var(--text); font-family: var(--font-title); font-size: 20px; line-height: 1.2; margin: 4px 0 0; }
+.lyrics-retry { min-height: 44px; padding: 8px 16px; border: 1px solid var(--border); border-radius: 9999px; background: var(--highlight); color: var(--text); }
+.lyrics-retry:hover { border-color: var(--text); }
+.lyrics-status { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 12px 0; }
+.lyrics-lines { max-height: 280px; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--border) transparent; }
+.lyrics-line { color: var(--muted); font-size: 16px; line-height: 1.5; margin: 0; padding: 8px 12px; border-left: 2px solid transparent; white-space: pre-wrap; }
+.lyrics-line.is-active { color: var(--text); background: var(--highlight); border-left-color: var(--primary); font-weight: 700; }
+.lyrics-credit { display: inline-block; color: var(--muted); font-size: 12px; margin-top: 12px; text-decoration: none; }
+.lyrics-credit:hover { color: var(--primary); text-decoration: underline; }
+
 /* Song entry and playlist */
 .side-panel { gap: 24px; }
 .side-card { padding: 32px; }
