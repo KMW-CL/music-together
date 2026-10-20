@@ -396,7 +396,7 @@ function leaveRoom() {
   ui.landing.classList.remove('hidden');
   renderRecentRooms();
   history.pushState({}, '', location.pathname);
-  document.title = '서디미 뮤직';
+  document.title = window.getMusicPageTitle?.() || '서디미 뮤직';
 }
 
 function render() {
@@ -772,7 +772,7 @@ async function enterRoom(id, createdHostToken = null) {
   ui.code.textContent = `#${id.toUpperCase()}`;
   setConnection(false);
   history.replaceState({}, '', `/?room=${id}`);
-  document.title = '서디미 뮤직';
+  document.title = window.getMusicPageTitle?.() || '서디미 뮤직';
   try {
     const room = await api(`/api/rooms/${id}`);
     if (hostToken) {

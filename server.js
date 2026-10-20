@@ -547,8 +547,10 @@ async function serveFile(url, response) {
     '/': ['index.html', 'text/html; charset=utf-8'],
     '/index.html': ['index.html', 'text/html; charset=utf-8'],
     '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+    '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
     '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
     '/design.css': ['design.css', 'text/css; charset=utf-8'],
+    '/workspace.css': ['workspace.css', 'text/css; charset=utf-8'],
     '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
     '/lyrics.js': ['lyrics.js', 'text/javascript; charset=utf-8'],
   };
