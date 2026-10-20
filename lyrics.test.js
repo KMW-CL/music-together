@@ -52,6 +52,9 @@ test('lyrics matching rejects a different artist and ambiguous title', () => {
   const official = vm.runInContext("lyricsSignature(\"RESCENE (리센느) 'Runaway' Official MV\")", context);
   assert.equal(official.artist, 'RESCENE (리센느)');
   assert.equal(official.track, 'Runaway');
+  const translated = vm.runInContext("lyricsSignature('다시 듣고 싶어, 너의 노래가🌻: Vaundy - 괴수의 꽃노래 [가사/발음/해석]')", context);
+  assert.equal(translated.artist, 'Vaundy');
+  assert.equal(translated.track, '怪獣の花唄');
   const records = [
     { trackName: 'Never Gonna Give You Up', artistName: 'Cover Band', duration: 213, plainLyrics: 'Wrong' },
     { trackName: 'Never Gonna Give You Up', artistName: 'Rick Astley', duration: 212, syncedLyrics: '[00:01.00]Right' },
@@ -100,6 +103,18 @@ test('Korean lyrics win over a closer romanized version of the same song', () =>
   ];
   const chosen = vm.runInContext('bestLyricsRecord(variants, lyricsSignature("RESCENE (리센느) - Runaway MV"), 196)', context);
   assert.equal(chosen.duration, 182);
+});
+
+test('Japanese lyrics win over romanization for a Japanese song', () => {
+  const { context } = lyricsContext(async () => {});
+  context.variants = [
+    { trackName: '怪獣の花唄', artistName: 'Vaundy', duration: 226,
+      syncedLyrics: '[00:01.00]Romanized first line\n[00:12.00]Romanized second line' },
+    { trackName: '怪獣の花唄', artistName: 'Vaundy', duration: 232,
+      syncedLyrics: '[00:01.00]日本語の歌詞です\n[00:12.00]次の日本語の歌詞です' },
+  ];
+  const chosen = vm.runInContext('bestLyricsRecord(variants, lyricsSignature("Vaundy - 괴수의 꽃노래"), 226)', context);
+  assert.equal(chosen.duration, 232);
 });
 
 test('Korean lyrics from the fallback source replace romanized synced lyrics', async () => {

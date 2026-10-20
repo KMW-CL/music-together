@@ -26,8 +26,16 @@ function cleanLyricsTitle(title) {
 
 function lyricsSignature(title) {
   const cleaned = cleanLyricsTitle(title);
-  const pair = cleaned.match(/^(.+?)\s+[-–—]\s+(.+)$/);
-  if (pair) return { artist: pair[1].trim(), track: pair[2].trim() };
+  const pair = cleaned.match(/(?:^|[:：]\s*)([^:：]+?)\s+[-–—]\s+(.+)$/);
+  if (pair) {
+    const artist = pair[1].trim();
+    const track = pair[2].trim();
+    // Video uploads sometimes use a translated title that lyric catalogs do not index.
+    if (normalizedLyricsArtist(artist) === 'vaundy' && normalizedLyricsName(track) === '괴수의 꽃노래') {
+      return { artist, track: '怪獣の花唄' };
+    }
+    return { artist, track };
+  }
   const quoted = cleaned.match(/^(.+?)\s+['"“‘]([^'"”’]+)['"”’]$/);
   return quoted ? { artist: quoted[1].trim(), track: quoted[2].trim() } : { artist: '', track: cleaned };
 }
@@ -50,6 +58,13 @@ function koreanLyricsPreference(record) {
   return 10 + 4 * hangul / (hangul + latin);
 }
 
+function japaneseLyricsPreference(record, signature) {
+  if (!/[\u3040-\u30ff\u3400-\u9fff]/u.test(signature.track)) return 0;
+  const displayedLyrics = String(record.syncedLyrics || record.plainLyrics || '');
+  const japanese = (displayedLyrics.match(/[\u3040-\u30ff\u3400-\u9fff]/gu) || []).length;
+  return japanese >= 8 ? 8 : 0;
+}
+
 function lyricsMatchScore(record, signature, duration) {
   const expectedTitle = normalizedLyricsName(signature.track);
   const actualTitle = normalizedLyricsName(record.trackName || record.name);
@@ -64,7 +79,8 @@ function lyricsMatchScore(record, signature, duration) {
   if (difference > 60) return -1;
   return (actualTitle === expectedTitle ? 12 : 5) + (expectedArtist ? 8 : 0)
     + (difference <= 8 ? 2 : 0) + (record.syncedLyrics ? 2 : 0)
-    + (record.plainLyrics ? 1 : 0) + koreanLyricsPreference(record) - Math.min(5, difference / 10);
+    + (record.plainLyrics ? 1 : 0) + koreanLyricsPreference(record)
+    + japaneseLyricsPreference(record, signature) - Math.min(5, difference / 10);
 }
 
 function bestLyricsRecord(records, signature, duration) {
