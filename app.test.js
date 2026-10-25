@@ -21,6 +21,7 @@ test('the next song uses the activated YouTube player while the tab is hidden', 
     return elements.get(id);
   };
   const players = [];
+  const lyricsCalls = [];
   const playerStates = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, CUED: 5 };
   const savedSettings = new Map();
 
@@ -65,7 +66,8 @@ test('the next song uses the activated YouTube player while the tab is hidden', 
 
   const context = vm.createContext({
     document: { hidden: true, body: { classList: { add() {}, remove() {} } }, getElementById: element, createElement: () => element(Symbol()) },
-    window: { YT: { Player: FakePlayer }, addEventListener() {} },
+    window: { YT: { Player: FakePlayer }, addEventListener() {},
+      musicLyrics: { setTrack(...args) { lyricsCalls.push(args); } } },
     YT: { Player: FakePlayer, PlayerState: playerStates },
     localStorage: { getItem: (key) => savedSettings.get(key) ?? null, setItem: (key, value) => savedSettings.set(key, value) },
     location: { origin: 'http://localhost:3000', search: '' },
@@ -76,14 +78,23 @@ test('the next song uses the activated YouTube player while the tab is hidden', 
   vm.runInContext("roomId = '1234abcd'", context);
 
   const room = (id, videoId, version) => ({
-    id: '1234abcd', current: { id, videoId, title: id }, videoId,
+    id: '1234abcd', current: { id, videoId, title: id, artistHint: id === 'first' ? 'GIRIBOY(기리보이)' : '' }, videoId,
     playlist: [{ id, videoId, title: id }], currentId: id, playbackEpoch: version,
     playing: true, position: 0, version, listeners: 1,
   });
-  context.applyState(room('first', 'AAAAAAAAAAA', 1));
+  const firstRoom = room('first', 'AAAAAAAAAAA', 1);
+  firstRoom.upNext = { track: { id: 'queued', videoId: 'CCCCCCCCCCC', title: '대기한 곡' }, source: 'queue' };
+  firstRoom.playNext = ['queued'];
+  context.applyState(firstRoom);
+  assert.equal(elements.get('upNextTitle').textContent, '대기한 곡');
+  assert.match(elements.get('upNextDetail').textContent, /다음 재생 대기열/);
+  assert.equal(lyricsCalls.at(-1)[3], 'GIRIBOY(기리보이)');
   assert.equal(players.length, 1);
   players[0].ready();
   assert.equal(players[0].getPlayerState(), playerStates.PLAYING, '입장하면 재생을 자동으로 시도한다');
+  assert.equal(elements.get('volumeControl').value, '30');
+  assert.equal(elements.get('volumeValue').textContent, '30%');
+  assert.equal(players[0].volume, 30);
   assert.equal(elements.get('joinPlayButton').classList.states.get('hidden'), true);
   elements.get('volumeControl').value = '35';
   elements.get('volumeControl').listeners.input();

@@ -82,6 +82,7 @@ test('varied YouTube title examples produce usable artist and track names', () =
     ['YOASOBI - 밤을 달리다 [가사/해석]', 'YOASOBI', '밤을 달리다'],
     ['AC/DC - Back in Black (Official Audio)', 'AC/DC', 'Back in Black'],
     ['Artist - Love / Hate', 'Artist', 'Love / Hate'],
+    ['Hogu (호구) (Prod.by Fisherman of wybh) (feat.BrotherSu) (브라더수)', '', 'Hogu (호구)'],
   ];
   for (const [title, artist, track] of examples) {
     context.title = title;
@@ -95,6 +96,46 @@ test('varied YouTube title examples produce usable artist and track names', () =
   ];
   assert.equal(vm.runInContext('bestLyricsRecord(records, lyricsSignature("뉴진스 (NEWJEANS)－「OMG」 [LYRICS] 가사 한국어"), 212).artistName', context), 'NewJeans');
   assert.equal(vm.runInContext('searchLyricsArtist("뉴진스 (NEWJEANS)")', context), 'NEWJEANS');
+  context.hoguRecords = [
+    { trackName: 'Hogu (Prod.by Fisherman of wybh) (feat.BrotherSu)', artistName: 'GIRIBOY', duration: 230, plainLyrics: 'Right' },
+    { trackName: 'Hogu', artistName: 'Other Artist', duration: 230, plainLyrics: 'Wrong' },
+  ];
+  assert.equal(vm.runInContext('bestLyricsRecord(hoguRecords, { artist: "GIRIBOY(기리보이)", track: "Hogu (호구)" }, 230).artistName', context), 'GIRIBOY');
+});
+
+test('an artist hint finds a song whose YouTube title omits the artist', async () => {
+  const requests = [];
+  const { context, elements } = lyricsContext(async (url) => {
+    requests.push(url);
+    if (url.startsWith('https://api.lrcmux.dev/')) return { ok: true, json: async () => [] };
+    if (url.startsWith('/api/lyrics/titles?')) return { ok: true, json: async () => ({ titles: [] }) };
+    const query = new URL(url).searchParams;
+    return { ok: true, status: 200, json: async () =>
+      query.get('track_name') === 'Hogu' && query.get('artist_name') === 'GIRIBOY'
+        ? [{ trackName: 'Hogu (Prod.by Fisherman of wybh) (feat.BrotherSu)',
+          artistName: '기리보이', duration: 230, plainLyrics: '아무것도 필요 없어 다시 너를 생각해' }]
+        : [] };
+  });
+  await context.window.musicLyrics.setTrack('track-1',
+    'Hogu (호구) (Prod.by Fisherman of wybh) (feat.BrotherSu) (브라더수)', 230, 'GIRIBOY(기리보이)');
+  assert.ok(requests.some((url) => url.includes('track_name=Hogu&artist_name=GIRIBOY')));
+  assert.equal(elements.get('lyricsLines').children[0].textContent, '아무것도 필요 없어 다시 너를 생각해');
+});
+
+test('a late artist hint retries a title that was previously unmatched', async () => {
+  const { context, elements } = lyricsContext(async (url) => {
+    if (url.startsWith('https://api.lrcmux.dev/')) return { ok: true, json: async () => [] };
+    if (url.startsWith('/api/lyrics/titles?')) return { ok: true, json: async () => ({ titles: [] }) };
+    const query = new URL(url).searchParams;
+    return { ok: true, status: 200, json: async () =>
+      query.get('artist_name') === 'GIRIBOY'
+        ? [{ trackName: 'Hogu', artistName: 'GIRIBOY', duration: 230, plainLyrics: '다시 만난 우리의 이야기' }]
+        : [] };
+  });
+  await context.window.musicLyrics.setTrack('track-1', 'Hogu', 230);
+  assert.equal(elements.get('lyricsLines').children.length, 0);
+  await context.window.musicLyrics.setTrack('track-1', 'Hogu', 230, 'GIRIBOY');
+  assert.equal(elements.get('lyricsLines').children[0].textContent, '다시 만난 우리의 이야기');
 });
 
 test('a slash-tagged video searches the clean song name', async () => {

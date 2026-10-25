@@ -6,6 +6,7 @@ const lyricsCache = new Map();
 const lyricsClient = 'SudeemiMusic/0.1.0 (https://github.com/KMW-CL/music-together)';
 let lyricsKey = null;
 let lyricsTitle = '';
+let lyricsArtistHint = '';
 let lyricsTrackId = null;
 let lyricsDuration = 0;
 let lyricsRequestId = 0;
@@ -16,6 +17,10 @@ let lyricsPosition = 0;
 let lyricsNextRequestAt = 0;
 let lyricsRateLimitedUntil = 0;
 
+function withoutLyricsCredits(value) {
+  return String(value || '').replace(/\s*[(（]\s*(?:prod(?:uced)?\.?\s*by|feat(?:uring)?\.?|ft\.?)[^)）]*[)）](?:\s*[(（][^)）]*[)）])*\s*$/i, '').trim();
+}
+
 function cleanLyricsTitle(title) {
   return String(title || '').normalize('NFKC')
     .replace(/\s*[([][^\])]*(?:official|music video|mv|lyric|audio|뮤직비디오|가사|공식 영상|4k|hd)[^\])]*[)\]]/gi, '')
@@ -23,7 +28,7 @@ function cleanLyricsTitle(title) {
     .replace(/\s+[-–—]\s*\[[^\]]+\]\s*(?:ep|album|single)?\s*$/gi, '')
     .replace(/(?:\s*[/|｜ㅣ]\s*(?:k-?pop|lyrics?|가사))+\s*$/gi, '')
     .replace(/\s+(?:가사(?:\s+(?:한국어|한글))?|lyrics?)\s*$/i, '')
-    .trim();
+    .trim().replace(/\s*[(（]\s*(?:prod(?:uced)?\.?\s*by|feat(?:uring)?\.?|ft\.?)[^)）]*[)）].*$/i, '').trim();
 }
 
 function lyricsSignature(title) {
@@ -45,6 +50,10 @@ function normalizedLyricsName(value) {
 
 function normalizedLyricsArtist(value) {
   return normalizedLyricsName(String(value || '').replace(/\s*[-–—]\s*Topic\s*$/i, ''));
+}
+
+function cleanLyricsArtistHint(value) {
+  return String(value || '').trim().replace(/\s*[-–—]\s*Topic\s*$/i, '').replace(/\s+Official Artist Channel$/i, '');
 }
 
 function lyricsArtistVariants(artist) {
@@ -73,10 +82,9 @@ function japaneseLyricsPreference(record, signature) {
 }
 
 function lyricsMatchScore(record, signature, duration) {
-  const expectedTitle = normalizedLyricsName(signature.track);
-  const actualTitle = normalizedLyricsName(record.trackName || record.name);
-  if (!expectedTitle || !actualTitle) return -1;
-  if (expectedTitle !== actualTitle) return -1;
+  const expectedTitles = lyricsTitleVariants(signature.track).map((title) => normalizedLyricsName(withoutLyricsCredits(title))).filter(Boolean);
+  const actualTitles = lyricsTitleVariants(withoutLyricsCredits(record.trackName || record.name)).map(normalizedLyricsName).filter(Boolean);
+  if (!expectedTitles.length || !actualTitles.some((title) => expectedTitles.includes(title))) return -1;
   const expectedArtists = lyricsArtistVariants(signature.artist).map(normalizedLyricsArtist).filter(Boolean);
   const actualArtists = lyricsArtistVariants(record.artistName).map(normalizedLyricsArtist).filter(Boolean);
   if (expectedArtists.length && !expectedArtists.some((expectedArtist) => actualArtists.some((actualArtist) =>
@@ -84,7 +92,7 @@ function lyricsMatchScore(record, signature, duration) {
       || expectedArtist.startsWith(`${actualArtist} `)))) return -1;
   const difference = Number.isFinite(record.duration) && duration > 0 ? Math.abs(record.duration - duration) : 0;
   if (difference > 60) return -1;
-  return (actualTitle === expectedTitle ? 12 : 5) + (expectedArtists.length ? 8 : 0)
+  return 12 + (expectedArtists.length ? 8 : 0)
     + (difference <= 8 ? 2 : 0) + (record.syncedLyrics ? 2 : 0)
     + (record.plainLyrics ? 1 : 0) + koreanLyricsPreference(record)
     + japaneseLyricsPreference(record, signature) - Math.min(5, difference / 10);
@@ -164,7 +172,10 @@ async function lookupLyrics(signature, duration, signal) {
 function lyricsTitleVariants(track) {
   const variants = [track];
   const pair = track.match(/^(.+?)\s*[([（【]\s*([^\])）】]+)\s*[)\]）】]\s*$/u);
-  if (pair) variants.push(pair[1].trim(), pair[2].trim());
+  if (pair && (/[가-힣]/u.test(pair[1]) !== /[가-힣]/u.test(pair[2])
+    || /[\u3040-\u30ff\u3400-\u9fff]/u.test(pair[1]) !== /[\u3040-\u30ff\u3400-\u9fff]/u.test(pair[2]))) {
+    variants.push(pair[1].trim(), pair[2].trim());
+  }
   return variants;
 }
 
@@ -179,8 +190,9 @@ async function suggestedLyricsTitles(signature, signal) {
     : [];
 }
 
-async function findLyrics(title, duration, signal) {
+async function findLyrics(title, duration, signal, artistHint = '') {
   const signature = lyricsSignature(title);
+  if (!signature.artist) signature.artist = cleanLyricsArtistHint(artistHint);
   if (!signature.track || /^유튜브 영상\s*[·-]/.test(signature.track)) return null;
   const searched = new Set();
   let searchError = null;
@@ -290,22 +302,24 @@ function clearLyrics() {
   lyricsController = null;
   lyricsKey = null;
   lyricsTitle = '';
+  lyricsArtistHint = '';
   lyricsTrackId = null;
   lyricsPosition = 0;
   showLyricsMessage('곡을 재생하면 가사를 자동으로 찾아요.');
 }
 
-async function setLyricsTrack(trackId, title, duration = 0) {
+async function setLyricsTrack(trackId, title, duration = 0, artistHint = '') {
   if (!trackId) {
     if (lyricsKey !== null) clearLyrics();
     return;
   }
-  const key = `${trackId}:${title}`;
+  const key = JSON.stringify([trackId, title, artistHint]);
   if (key === lyricsKey) return;
   lyricsRequestId++;
   lyricsController?.abort();
   lyricsTrackId = trackId;
   lyricsTitle = title;
+  lyricsArtistHint = artistHint;
   lyricsDuration = duration;
   lyricsKey = key;
   const requestId = lyricsRequestId;
@@ -313,8 +327,9 @@ async function setLyricsTrack(trackId, title, duration = 0) {
     showLyricsMessage('곡 제목을 확인하는 중이에요.');
     return;
   }
-  if (lyricsCache.has(title)) {
-    displayLyrics(lyricsCache.get(title));
+  const cacheKey = JSON.stringify([title, artistHint]);
+  if (lyricsCache.has(cacheKey)) {
+    displayLyrics(lyricsCache.get(cacheKey));
     return;
   }
   showLyricsMessage('가사를 찾는 중…');
@@ -322,9 +337,9 @@ async function setLyricsTrack(trackId, title, duration = 0) {
   lyricsController = controller;
   const timeout = setTimeout(() => controller.abort(), 25_000);
   try {
-    const record = await findLyrics(title, duration, controller.signal);
+    const record = await findLyrics(title, duration, controller.signal, artistHint);
     if (requestId !== lyricsRequestId) return;
-    lyricsCache.set(title, record);
+    lyricsCache.set(cacheKey, record);
     displayLyrics(record);
   } catch (error) {
     if (requestId !== lyricsRequestId) return;
@@ -338,10 +353,11 @@ async function setLyricsTrack(trackId, title, duration = 0) {
 lyricsRetry.addEventListener('click', () => {
   const trackId = lyricsTrackId;
   const title = lyricsTitle;
+  const artistHint = lyricsArtistHint;
   const duration = lyricsDuration;
-  lyricsCache.delete(title);
+  lyricsCache.delete(JSON.stringify([title, artistHint]));
   lyricsKey = null;
-  setLyricsTrack(trackId, title, duration);
+  setLyricsTrack(trackId, title, duration, artistHint);
 });
 
 window.musicLyrics = { setTrack: setLyricsTrack, setTime: updateLyricsPosition, clear: clearLyrics };

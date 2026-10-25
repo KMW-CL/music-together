@@ -26,6 +26,9 @@ test('room creation, shared controls, and late join state', async () => {
   assert.match(id, /^[a-f0-9]{8}$/);
   assert.match(created.body.hostToken, /^[a-f0-9]{64}$/);
   assert.equal(created.body.videoId, null);
+  assert.equal(created.body.repeat, true);
+  assert.equal(created.body.repeatOne, false);
+  assert.equal(created.body.shuffle, false);
 
   const control = (body) => request(`/api/rooms/${id}/control`, {
     method: 'POST',
@@ -61,6 +64,104 @@ test('room creation, shared controls, and late join state', async () => {
   const finished = await control({ type: 'next' });
   assert.equal(finished.body.current.videoId, 'dQw4w9WgXcQ');
   assert.deepEqual(finished.body.playlist.map((track) => track.videoId), ['dQw4w9WgXcQ', 'ABCDEFGHIJK']);
+});
+
+test('next-play queue takes priority and resumes the original playlist order', async () => {
+  const room = (await request('/api/rooms', { method: 'POST' })).body;
+  const control = (type, extra = {}) => request(`/api/rooms/${room.id}/control`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, ...extra }),
+  });
+  const first = (await control('add', { videoId: 'AAAAAAAAAAA', title: '첫 곡' })).body;
+  const second = (await control('add', { videoId: 'BBBBBBBBBBB', title: '둘째 곡' })).body.playlist[1];
+  const thirdAdded = (await control('add', { videoId: 'CCCCCCCCCCC', title: '셋째 곡' })).body;
+  const third = thirdAdded.playlist[2];
+  assert.equal(thirdAdded.upNext.track.id, second.id);
+  let result = await control('queue-next', { trackId: third.id });
+  assert.deepEqual(result.body.playNext, [third.id]);
+  assert.equal(result.body.upNext.track.id, third.id);
+  assert.equal(result.body.upNext.source, 'queue');
+  assert.equal((await control('queue-next', { trackId: third.id })).body.playNext.length, 1);
+  assert.deepEqual((await control('unqueue-next', { trackId: third.id })).body.playNext, []);
+  assert.deepEqual((await control('queue-next', { trackId: third.id })).body.playNext, [third.id]);
+  assert.equal((await control('queue-next', { trackId: first.currentId })).status, 400);
+  result = await control('add', { videoId: 'DDDDDDDDDDD', title: '넷째 곡', playNext: true });
+  const fourthId = result.body.playlist[3].id;
+  assert.deepEqual(result.body.playNext, [third.id, fourthId]);
+  assert.deepEqual(result.body.playlist.map((track) => track.title), ['첫 곡', '둘째 곡', '셋째 곡', '넷째 곡']);
+  result = await control('next');
+  assert.equal(result.body.currentId, third.id);
+  assert.deepEqual(result.body.playNext, [fourthId]);
+  assert.equal(result.body.upNext.track.id, fourthId);
+  result = await control('next');
+  assert.equal(result.body.currentId, fourthId);
+  assert.deepEqual(result.body.playNext, []);
+  assert.equal(result.body.upNext.track.id, second.id);
+  assert.equal((await control('next')).body.currentId, second.id);
+  result = await control('queue-next', { trackId: fourthId });
+  assert.deepEqual(result.body.playNext, [fourthId]);
+  assert.deepEqual((await control('remove', { trackId: fourthId })).body.playNext, []);
+  await control('shuffle', { enabled: true });
+  assert.deepEqual((await control('queue-next', { trackId: third.id })).body.playNext, [third.id]);
+  result = await control('next');
+  assert.equal(result.body.currentId, third.id);
+  assert.equal(result.body.upNext.source, 'shuffle');
+  assert.equal(result.body.upNext.track.id, first.currentId);
+  assert.equal((await control('next')).body.currentId, first.currentId, 'queued track should not repeat in the same shuffle cycle');
+});
+
+test('queued next song survives restart and overrides one-song repeat', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'music-together-queue-test-'));
+  const storagePath = path.join(directory, 'rooms.json');
+  let localServer = createAppServer({ storagePath, youtubeApiKey: '' });
+  const listen = async () => {
+    await new Promise((resolve) => localServer.listen(0, '127.0.0.1', resolve));
+    return `http://127.0.0.1:${localServer.address().port}`;
+  };
+  let origin = await listen();
+  try {
+    const created = await fetch(`${origin}/api/rooms`, { method: 'POST' }).then((response) => response.json());
+    const control = async (type, extra = {}) => fetch(`${origin}/api/rooms/${created.id}/control`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, ...extra }),
+    }).then((response) => response.json());
+    await control('add', { videoId: 'AAAAAAAAAAA' });
+    const next = await control('add', { videoId: 'BBBBBBBBBBB', playNext: true });
+    await control('repeat-one', { enabled: true });
+    await new Promise((resolve) => localServer.close(resolve));
+    localServer = createAppServer({ storagePath, youtubeApiKey: '' });
+    origin = await listen();
+    const restored = await fetch(`${origin}/api/rooms/${created.id}`).then((response) => response.json());
+    assert.deepEqual(restored.playNext, [next.playlist[1].id]);
+    assert.equal(restored.upNext.track.id, next.playlist[1].id);
+    const advanced = await control('next', { fromEnd: true });
+    assert.equal(advanced.currentId, next.playlist[1].id);
+    assert.deepEqual(advanced.playNext, []);
+    assert.equal(advanced.upNext.source, 'repeat-one');
+    assert.equal(advanced.upNext.track.id, next.playlist[1].id);
+    assert.equal((await control('next', { fromEnd: true })).currentId, next.playlist[1].id);
+  } finally {
+    if (localServer.listening) await new Promise((resolve) => localServer.close(resolve));
+    assert.ok(path.resolve(directory).startsWith(`${path.resolve(tmpdir())}${path.sep}`));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('shuffle preview stays accurate at a cycle boundary when repeat is switched off', async () => {
+  const room = (await request('/api/rooms', { method: 'POST' })).body;
+  const control = (type, extra = {}) => request(`/api/rooms/${room.id}/control`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, ...extra }),
+  });
+  const first = (await control('add', { videoId: 'AAAAAAAAAAA' })).body.currentId;
+  const second = (await control('add', { videoId: 'BBBBBBBBBBB' })).body.playlist[1].id;
+  let result = await control('shuffle', { enabled: true });
+  assert.equal(result.body.upNext.track.id, second);
+  result = await control('next');
+  assert.equal(result.body.currentId, second);
+  assert.equal(result.body.upNext.track.id, first, 'next shuffle cycle is selected before preview');
+  result = await control('repeat', { enabled: false });
+  assert.equal(result.body.upNext.track, null, 'turning repeat off discards the unused next cycle');
+  result = await control('next');
+  assert.equal(result.body.currentId, second);
+  assert.equal(result.body.playing, false);
 });
 
 test('serves the application', async () => {
@@ -138,6 +239,8 @@ test('the host can restrict shared playlist controls while playback stays synchr
     { type: 'add', videoId: 'BBBBBBBBBBB' },
     { type: 'select', trackId },
     { type: 'move', trackId, targetIndex: 0 },
+    { type: 'queue-next', trackId },
+    { type: 'unqueue-next', trackId },
     { type: 'remove', trackId },
     { type: 'repeat', enabled: false },
     { type: 'repeat-one', enabled: true },
@@ -459,7 +562,7 @@ test('a one-song playlist restarts the same track on next', async () => {
   const next = (await control('next')).body;
   assert.equal(next.currentId, added.currentId);
   assert.equal(next.playlist.length, 1);
-  assert.equal(next.position, 0);
+  assert.ok(next.position >= 0 && next.position < 0.1, '다음 곡은 처음부터 재생된다');
   assert.equal(next.playing, true);
   assert.ok(next.playbackEpoch > added.playbackEpoch);
 });
@@ -516,7 +619,8 @@ test('configured YouTube precheck rejects blocked videos and adds an allowed tit
       if (id === 'ABCDEFGHIJK') return { ok: false, status: 403 };
       const items = id === 'n5Ps-iGFifk' ? [] : [{
         id,
-        snippet: { title: 'API에서 확인한 제목' },
+        snippet: { title: 'API에서 확인한 제목', channelTitle: 'GIRIBOY',
+          description: 'Provided to YouTube by Loen Entertainment\n\nHogu (호구) · GIRIBOY(기리보이)\n\nAuto-generated by YouTube.' },
         status: { embeddable: id !== 'bGyOYEZMRsc', privacyStatus: 'public', uploadStatus: 'processed' },
         contentDetails: { duration: 'PT3M33S', contentRating: {} },
       }];
@@ -548,6 +652,7 @@ test('configured YouTube precheck rejects blocked videos and adds an allowed tit
     assert.equal(allowed.status, 200);
     assert.equal(allowed.body.current.title, 'API에서 확인한 제목');
     assert.equal(allowed.body.current.titleSource, 'auto');
+    assert.equal(allowed.body.current.artistHint, 'GIRIBOY(기리보이)');
     assert.equal(allowed.body.current.durationSeconds, 213);
     assert.deepEqual(inspected, ['bGyOYEZMRsc', 'n5Ps-iGFifk', 'ABCDEFGHIJK', 'dQw4w9WgXcQ']);
     assert.equal(JSON.stringify(allowed.body).includes('test-key'), false);
