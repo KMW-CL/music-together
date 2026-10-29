@@ -19,6 +19,43 @@ async function request(path, options) {
   return { status: response.status, body: await response.json() };
 }
 
+test('local app remembers saved and joined rooms across browser sessions', async () => {
+  const folder = await mkdtemp(path.join(tmpdir(), 'music-recent-'));
+  const storagePath = path.join(folder, 'rooms.json');
+  const openServer = async () => {
+    const app = createAppServer({ storagePath, youtubeApiKey: '' });
+    await new Promise((resolve) => app.listen(0, '127.0.0.1', resolve));
+    return { app, origin: `http://127.0.0.1:${app.address().port}` };
+  };
+  let current;
+  try {
+    current = await openServer();
+    const call = async (endpoint, options) => {
+      const response = await fetch(`${current.origin}${endpoint}`, options);
+      return { status: response.status, body: await response.json() };
+    };
+    const created = await call('/api/rooms', { method: 'POST' });
+    const local = (await call('/api/local/recent-rooms')).body.rooms;
+    assert.ok(local.some((room) => room.id === created.body.id));
+    const remoteUrl = 'https://music.example/?room=1234abcd';
+    assert.equal((await call('/api/local/recent-rooms', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: remoteUrl }),
+    })).status, 200);
+    await new Promise((resolve) => current.app.close(resolve));
+    current = await openServer();
+    const reopened = (await call('/api/local/recent-rooms')).body.rooms;
+    assert.ok(reopened.some((room) => room.id === created.body.id));
+    assert.ok(reopened.some((room) => room.url === remoteUrl));
+    assert.equal((await call('/api/local/recent-rooms', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: remoteUrl }),
+    })).status, 200);
+    assert.ok(!(await call('/api/local/recent-rooms')).body.rooms.some((room) => room.url === remoteUrl));
+  } finally {
+    if (current?.app.listening) await new Promise((resolve) => current.app.close(resolve));
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
 test('room creation, shared controls, and late join state', async () => {
   const created = await request('/api/rooms', { method: 'POST' });
   assert.equal(created.status, 201);
@@ -171,6 +208,20 @@ test('serves the application', async () => {
   const lyrics = await fetch(`${base}/lyrics.js`);
   assert.equal(lyrics.status, 200);
   assert.match(lyrics.headers.get('content-type'), /text\/javascript/);
+  const health = await fetch(`${base}/api/health`);
+  assert.deepEqual(await health.json(), { app: 'music-together' });
+  const manifestResponse = await fetch(`${base}/manifest.webmanifest`);
+  assert.match(manifestResponse.headers.get('content-type'), /application\/manifest\+json/);
+  const manifest = await manifestResponse.json();
+  assert.equal(manifest.display, 'standalone');
+  for (const icon of manifest.icons) {
+    const response = await fetch(`${base}${icon.src}`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /image\/png/);
+  }
+  const favicon = await fetch(`${base}/favicon.ico?v=2`);
+  assert.equal(favicon.status, 200);
+  assert.match(favicon.headers.get('content-type'), /image\/x-icon/);
 });
 
 test('title suggestions keep only same-artist translated title pairs and cache them', async () => {
@@ -735,8 +786,8 @@ test('any room member can search embeddable videos without exposing the API key'
       assert.equal(request.searchParams.get('type'), 'video');
       assert.equal(request.searchParams.get('videoCategoryId'), '10');
       assert.equal(request.searchParams.get('maxResults'), '25');
-      assert.equal(request.searchParams.get('videoEmbeddable'), 'true');
-      assert.equal(request.searchParams.get('videoSyndicated'), 'true');
+      assert.equal(request.searchParams.has('videoEmbeddable'), false);
+      assert.equal(request.searchParams.has('videoSyndicated'), false);
       assert.equal(request.searchParams.has('key'), false);
       assert.equal(options.headers['x-goog-api-key'], 'test-key');
       searches++;
@@ -793,7 +844,7 @@ test('any room member can search embeddable videos without exposing the API key'
   }
 });
 
-test('search hides videos that would fail the playlist precheck', async () => {
+test('search includes videos even when playback is restricted', async () => {
   const ids = ['AAAAAAAAAAA', 'BBBBBBBBBBB', 'CCCCCCCCCCC', 'DDDDDDDDDDD', 'EEEEEEEEEEE', 'FFFFFFFFFFF', 'GGGGGGGGGGG'];
   const searchServer = createAppServer({
     youtubeApiKey: 'test-key',
@@ -821,9 +872,9 @@ test('search hides videos that would fail the playlist precheck', async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'artist song' }),
     });
     assert.equal(response.status, 200);
-    assert.deepEqual((await response.json()).items, [
-      { videoId: ids[0], title: ids[0], channel: 'Artist', durationSeconds: 120 },
-    ]);
+    const items = (await response.json()).items;
+    assert.deepEqual(items.map((item) => item.videoId), ids);
+    assert.equal(items[0].durationSeconds, 120);
   } finally {
     await new Promise((resolve) => searchServer.close(resolve));
   }
@@ -892,4 +943,25 @@ test('music search puts an artist official MV ahead of unrelated coverage', asyn
   } finally {
     await new Promise((resolve) => searchServer.close(resolve));
   }
+});
+
+
+test('YouTube suggestions validate, filter and cache results without an API key', async () => {
+  let calls = 0;
+  let upstream;
+  const app = createAppServer({ youtubeApiKey: '', fetchSuggestions: async (url) => {
+    calls++;
+    upstream = new URL(url);
+    return { ok: true, json: async () => ['아이유', ['아이유 노래', '아이유 노래', '', 12, '아이유 밤편지']] };
+  } });
+  await new Promise((resolve) => app.listen(0, '127.0.0.1', resolve));
+  try {
+    const origin = `http://127.0.0.1:${app.address().port}`;
+    const response = await fetch(`${origin}/api/search/suggestions?q=${encodeURIComponent('아이유')}`);
+    assert.deepEqual(await response.json(), { suggestions: ['아이유 노래', '아이유 밤편지'] });
+    assert.equal(upstream.searchParams.get('ds'), 'yt');
+    await fetch(`${origin}/api/search/suggestions?q=${encodeURIComponent('아이유')}`);
+    assert.equal(calls, 1);
+    assert.equal((await fetch(`${origin}/api/search/suggestions?q=`)).status, 400);
+  } finally { await new Promise((resolve) => app.close(resolve)); }
 });

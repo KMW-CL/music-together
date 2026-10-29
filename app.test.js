@@ -15,7 +15,7 @@ test('the next song uses the activated YouTube player while the tab is hidden', 
           remove(name) { this.states.set(name, false); },
         },
         addEventListener(type, listener) { this.listeners[type] = listener; },
-        setAttribute() {}, replaceChildren() {}, append() {}, before() {}, remove() {},
+        setAttribute() {}, removeAttribute() {}, replaceChildren() {}, append() {}, before() {}, remove() {},
       });
     }
     return elements.get(id);
@@ -134,7 +134,7 @@ test('playlist search jumps between matching rows without changing the playing t
     listeners: {}, dataset: {}, children: [], value: '',
     classList: { toggle() {}, add() {}, remove() {} },
     addEventListener(type, listener) { this.listeners[type] = listener; },
-    setAttribute() {},
+    setAttribute() {}, removeAttribute() {},
     replaceChildren(...children) { this.children = children; },
     append(...children) { this.children.push(...children); },
     before() {}, remove() {},
@@ -191,7 +191,7 @@ test('search cards paginate without scrolling and fetch more after the loaded re
     close() { this.open = false; this.listeners.close?.(); },
     focus() { this.focused = true; },
     click() { return this.listeners.click?.(); },
-    setAttribute() {},
+    setAttribute() {}, removeAttribute() {},
     replaceChildren(...children) { this.children = children; },
     append(...children) { this.children.push(...children); },
   });
@@ -200,7 +200,7 @@ test('search cards paginate without scrolling and fetch more after the loaded re
     return elements.get(id);
   };
   const calls = [];
-  const savedSettings = new Map();
+  const savedSettings = new Map([['music-together-blocked-search-videos', JSON.stringify([['A0000000000', Date.now() + 60000]])]]);
   const viewport = {
     innerWidth: 900, innerHeight: 700, listeners: {},
     addEventListener(type, listener) { this.listeners[type] = listener; },
@@ -235,7 +235,8 @@ test('search cards paginate without scrolling and fetch more after the loaded re
   await elements.get('searchForm').listeners.submit({ preventDefault() {} });
   assert.equal(elements.get('searchResults').children.length, 4);
   assert.equal(vm.runInContext('probeCalls', context), 0, 'searching must not open an embedded player');
-  assert.equal(vm.runInContext("searchItems.some((item) => item.videoId === 'Ocq3Y6DH4D0')", context), false);
+  assert.equal(vm.runInContext("searchItems.some((item) => item.videoId === 'Ocq3Y6DH4D0')", context), true);
+  assert.equal(vm.runInContext("searchItems.some((item) => item.videoId === 'A0000000000')", context), true);
   assert.equal(elements.get('searchResults').children[0].children[0].children[1].textContent, '3:42');
   assert.equal(elements.get('searchResults').children[1].children[0].children[1].textContent, '--:--');
   assert.equal(context.formatVideoDuration(3_723), '1:02:03');
@@ -247,7 +248,7 @@ test('search cards paginate without scrolling and fetch more after the loaded re
   assert.equal(calls.length, 1, 'loaded results should not trigger another API request');
 
   await elements.get('searchNext').listeners.click();
-  assert.equal(elements.get('searchResults').children.length, 2);
+  assert.equal(elements.get('searchResults').children.length, 3);
   assert.equal(calls.length, 1);
 
   await elements.get('searchNext').listeners.click();
@@ -256,7 +257,6 @@ test('search cards paginate without scrolling and fetch more after the loaded re
   assert.equal(elements.get('searchPageLabel').textContent, '4페이지');
   assert.equal(vm.runInContext('probeCalls', context), 0, 'pagination must not open an embedded player');
   assert.equal(vm.runInContext("searchItems.some((item) => item.videoId === 'B0000000000')", context), true);
-  assert.equal(savedSettings.has('music-together-blocked-search-videos'), false);
 
   elements.get('searchPrevious').listeners.click();
   assert.equal(elements.get('searchResults').children.length, 4);
@@ -284,16 +284,10 @@ test('search cards paginate without scrolling and fetch more after the loaded re
   elements.get('searchDialog').listeners.keydown({ key: 'Escape', preventDefault() {} });
   assert.equal(elements.get('searchDialog').open, false);
 
-  context.rememberEmbedBlockedVideo('A0000000000');
-  assert.equal(vm.runInContext("isBlockedSearchVideo('A0000000000')", context), true);
-  assert.match(savedSettings.get('music-together-blocked-search-videos'), /A0000000000/);
-  elements.get('openSearchButton').listeners.click();
-  await elements.get('searchForm').listeners.submit({ preventDefault() {} });
-  assert.equal(vm.runInContext("searchItems.some((item) => item.videoId === 'A0000000000')", context), false);
-
   viewport.innerWidth = 900;
   viewport.innerHeight = 700;
   viewport.listeners.resize();
+  elements.get('openSearchButton').listeners.click();
   await elements.get('searchForm').listeners.submit({ preventDefault() {} });
   assert.equal(elements.get('searchResults').children.length, 4);
   assert.match(elements.get('searchStatus').textContent, /추가할 때 재생 가능 여부를 확인/);

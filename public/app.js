@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const ui = {
   landing: $('landingView'), steps: $('landingSteps'), recentRooms: $('recentRooms'), recentRoomList: $('recentRoomList'),
-  room: $('roomView'), create: $('createRoomButton'), leave: $('leaveRoomButton'),
+  room: $('roomView'), create: $('createRoomButton'), joinForm: $('joinRoomForm'), joinInput: $('joinRoomInput'), joinButton: $('joinRoomButton'), leave: $('leaveRoomButton'),
   brand: $('brandLink'), code: $('roomCode'), listenerCount: $('roomListenerCount'), role: $('roleTag'), connection: $('connectionStatus'),
   copy: $('copyLinkButton'),
   copyLabel: $('copyLinkLabel'),
@@ -9,7 +9,7 @@ const ui = {
   form: $('videoForm'), videoUrl: $('videoUrl'), videoTitle: $('videoTitle'), addTrack: $('addTrackButton'), addNext: $('addNextButton'), probePreview: $('probePreview'),
   hostCardDescription: $('hostCardDescription'),
   openSearch: $('openSearchButton'), searchDialog: $('searchDialog'), closeSearch: $('closeSearchButton'), searchProbePreview: $('searchProbePreview'),
-  searchForm: $('searchForm'), searchQuery: $('searchQuery'), searchButton: $('searchButton'), searchStatus: $('searchStatus'), searchResults: $('searchResults'),
+  searchSuggestions: $('searchSuggestions'), searchForm: $('searchForm'), searchQuery: $('searchQuery'), searchButton: $('searchButton'), searchStatus: $('searchStatus'), searchResults: $('searchResults'),
   searchPagination: $('searchPagination'), searchPrevious: $('searchPrevious'), searchNext: $('searchNext'), searchPageLabel: $('searchPageLabel'),
   empty: $('emptyPlayer'), emptyMessage: $('emptyMessage'),
   joinPlay: $('joinPlayButton'), alert: $('playerAlert'), alertTitle: $('playerAlertTitle'),
@@ -20,7 +20,7 @@ const ui = {
   volume: $('volumeControl'), volumeValue: $('volumeValue'), muteButton: $('volumeMuteButton'),
   volumeWaves: $('volumeWaves'), volumeMuteSlash: $('volumeMuteSlash'),
   next: $('nextTrackButton'),
-  playbackLabel: $('playbackLabel'), playlistList: $('playlistList'), playlistCount: $('playlistCount'),
+  playbackLabel: $('playbackLabel'), playlistList: $('playlistList'), playlistBottomButton: $('playlistBottomButton'), playlistCount: $('playlistCount'),
   playlistSearchForm: $('playlistSearchForm'), playlistSearchQuery: $('playlistSearchQuery'), backToPlayer: $('backToPlayerButton'),
   playlistSearchStatus: $('playlistSearchStatus'), playlistSearchPrevious: $('playlistSearchPrevious'), playlistSearchNext: $('playlistSearchNext'),
   repeatButton: $('repeatButton'), repeatOneButton: $('repeatOneButton'), shuffleButton: $('shuffleButton'),
@@ -49,6 +49,11 @@ let toastTimer;
 let precheckEnabled = false;
 let addingTrack = false;
 let failedVideoIds = new Set();
+let suggestionTimer = null;
+let suggestionRequestId = 0;
+let suggestions = [];
+let activeSuggestion = -1;
+let composingSearch = false;
 let searchPageSize = 4;
 let searchItems = [];
 let searchPage = 0;
@@ -64,14 +69,10 @@ const volumeRestoreStorageKey = 'music-together-volume-before-mute';
 const defaultVolume = 30;
 const videoSizeStorageKey = 'music-together-compact-video';
 const recentRoomStorageKey = 'music-together-recent-rooms';
-const blockedSearchStorageKey = 'music-together-blocked-search-videos';
-const blockedSearchTtlMs = 7 * 24 * 60 * 60_000;
-// The YouTube API reports this video as embeddable, but this room's iframe rejects it.
-const knownEmbedBlockedVideoIds = new Set(['Ocq3Y6DH4D0']);
 const maxRecentRooms = 8;
 const playlistActions = new Set(['add', 'load', 'select', 'move', 'remove', 'queue-next', 'unqueue-next', 'repeat', 'repeat-one', 'shuffle', 'metadata']);
 let recentRooms = readRecentRooms();
-let blockedSearchVideos = readBlockedSearchVideos();
+let serverRecentRooms = [];
 let localVolume = readLocalVolume();
 let volumeBeforeMute = readVolumeBeforeMute(localVolume);
 let compactVideo = false;
@@ -142,28 +143,6 @@ function showToast(message) {
   toastTimer = setTimeout(() => ui.toast.classList.remove('show'), 3_200);
 }
 
-function readBlockedSearchVideos() {
-  try {
-    const entries = JSON.parse(localStorage.getItem(blockedSearchStorageKey) || '[]');
-    if (!Array.isArray(entries)) return new Map();
-    return new Map(entries.filter(([videoId, expiresAt]) =>
-      /^[A-Za-z0-9_-]{11}$/.test(videoId) && Number.isFinite(expiresAt) && expiresAt > Date.now()));
-  } catch { return new Map(); }
-}
-
-function isBlockedSearchVideo(videoId) {
-  return knownEmbedBlockedVideoIds.has(videoId) || (blockedSearchVideos.get(videoId) || 0) > Date.now();
-}
-
-function rememberEmbedBlockedVideo(videoId) {
-  blockedSearchVideos.set(videoId, Date.now() + blockedSearchTtlMs);
-  try { localStorage.setItem(blockedSearchStorageKey, JSON.stringify([...blockedSearchVideos])); }
-  catch { /* Keep the block for this tab. */ }
-  searchItems = searchItems.filter((item) => !isBlockedSearchVideo(item.videoId));
-  searchPage = Math.min(searchPage, Math.max(0, Math.ceil(searchItems.length / searchPageSize) - 1));
-  if (ui.searchDialog.open) renderSearchPage();
-}
-
 function formatTime(seconds) {
   const safe = Math.max(0, Math.floor(Number(seconds) || 0));
   const minutes = Math.floor(safe / 60);
@@ -210,8 +189,10 @@ function readRecentRooms() {
     return saved
       .filter((item) => item && /^[a-f0-9]{8}$/.test(item.id)
         && Number.isSafeInteger(item.visitedAt) && item.visitedAt > 0 && item.visitedAt < 8.64e15)
+      .map((item) => ({ ...item, url: roomFromInvite(item.url || item.id)?.href }))
+      .filter((item) => item.url)
       .sort((a, b) => b.visitedAt - a.visitedAt)
-      .filter((item) => !seen.has(item.id) && seen.add(item.id))
+      .filter((item) => !seen.has(item.url) && seen.add(item.url))
       .slice(0, maxRecentRooms);
   } catch { return []; }
 }
@@ -223,21 +204,37 @@ function saveRecentRooms() {
 }
 
 function rememberRoom(id) {
-  recentRooms = [{ id, visitedAt: Date.now() }, ...recentRooms.filter((item) => item.id !== id)].slice(0, maxRecentRooms);
+  const url = roomFromInvite(location.href)?.href || `${location.origin}/?room=${id}`;
+  recentRooms = [{ id, url, visitedAt: Date.now() }, ...recentRooms.filter((item) => item.url !== url)].slice(0, maxRecentRooms);
   saveRecentRooms();
+  api('/api/local/recent-rooms', { method: 'POST', body: JSON.stringify({ url }) }).catch(() => {});
+}
+
+async function refreshServerRecentRooms() {
+  try {
+    const data = await api('/api/local/recent-rooms');
+    serverRecentRooms = (Array.isArray(data.rooms) ? data.rooms : []).map((item) => ({
+      id: item.id, url: roomFromInvite(item.url)?.href, visitedAt: item.visitedAt,
+    })).filter((item) => /^[a-f0-9]{8}$/.test(item.id) && item.url && Number.isSafeInteger(item.visitedAt));
+    renderRecentRooms();
+  } catch { /* Browser history remains available when this endpoint is unavailable. */ }
 }
 
 function renderRecentRooms() {
-  const hasRooms = recentRooms.length > 0;
+  const seen = new Set();
+  const rooms = [...recentRooms, ...serverRecentRooms].sort((a, b) => b.visitedAt - a.visitedAt)
+    .filter((item) => !seen.has(item.url) && seen.add(item.url)).slice(0, maxRecentRooms);
+  const hasRooms = rooms.length > 0;
   ui.landing.classList.toggle('has-recent-rooms', hasRooms);
   ui.recentRooms.classList.toggle('hidden', !hasRooms);
   ui.steps.classList.toggle('hidden', hasRooms);
-  const entries = recentRooms.map(({ id, visitedAt }) => {
+  const entries = rooms.map(({ id, url, visitedAt }) => {
     const item = document.createElement('li');
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'recent-room-open';
     open.dataset.roomId = id;
+    open.dataset.roomUrl = url;
     open.dataset.action = 'open';
     open.setAttribute('aria-label', `음악방 ${id.toUpperCase()} 다시 입장`);
     const code = document.createElement('strong');
@@ -253,6 +250,7 @@ function renderRecentRooms() {
     forget.type = 'button';
     forget.className = 'recent-room-forget';
     forget.dataset.roomId = id;
+    forget.dataset.roomUrl = url;
     forget.dataset.action = 'forget';
     forget.setAttribute('aria-label', `음악방 ${id.toUpperCase()} 방문 기록에서 삭제`);
     forget.title = '방문 기록에서 삭제';
@@ -562,7 +560,45 @@ function renderPlaylist() {
   ui.playlistEmpty.classList.toggle('hidden', playlist.length > 0);
   ui.playlistList.replaceChildren(...playlist.map((track, index) => trackRow(track, index, playlist.length)));
   updatePlaylistSearch();
+  schedulePlaylistBottomButton();
 }
+
+function updatePlaylistBottomButton() {
+  const list = ui.playlistList;
+  const rect = list.getBoundingClientRect();
+  const internalScroll = list.scrollHeight > list.clientHeight + 1;
+  const visible = internalScroll ? list.scrollTop + list.clientHeight < list.scrollHeight - 2 : rect.bottom > window.innerHeight + 2;
+  const onScreen = rect.top < window.innerHeight && rect.bottom > 0 && rect.width > 0;
+  ui.playlistBottomButton.classList.toggle('hidden', !visible || !onScreen);
+  if (visible && onScreen) {
+    const right = Math.max(16, window.innerWidth - rect.right + 16);
+    let bottom = Math.max(16, window.innerHeight - Math.min(rect.bottom, window.innerHeight) + 16);
+    const playerButton = ui.backToPlayer.getBoundingClientRect();
+    const left = window.innerWidth - right - 44;
+    const top = window.innerHeight - bottom - 44;
+    if (playerButton.width && playerButton.height && left < playerButton.right && left + 44 > playerButton.left
+      && top < playerButton.bottom && top + 44 > playerButton.top) {
+      bottom = window.innerHeight - playerButton.top + 8;
+    }
+    ui.playlistBottomButton.style.right = `${right}px`;
+    ui.playlistBottomButton.style.bottom = `${bottom}px`;
+  }
+}
+
+function schedulePlaylistBottomButton() {
+  if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(updatePlaylistBottomButton);
+}
+
+ui.playlistList.addEventListener('scroll', schedulePlaylistBottomButton, { passive: true });
+window.addEventListener('scroll', schedulePlaylistBottomButton, { passive: true });
+window.addEventListener('resize', schedulePlaylistBottomButton);
+ui.playlistBottomButton.addEventListener('click', () => {
+  const list = ui.playlistList;
+  const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+  if (list.scrollHeight > list.clientHeight + 1) list.scrollTo({ top: list.scrollHeight, behavior });
+  else list.lastElementChild?.scrollIntoView({ behavior, block: 'end' });
+});
+if (typeof ResizeObserver !== 'undefined') new ResizeObserver(schedulePlaylistBottomButton).observe(ui.playlistList);
 
 function playlistMatches() {
   const query = (ui.playlistSearchQuery.value || '').trim().normalize('NFKC').toLocaleLowerCase();
@@ -730,7 +766,6 @@ function ensurePlayer() {
       },
       onError(event) {
         if (event.target !== player) return;
-        if ([100, 101, 150].includes(event.data) && state?.videoId) rememberEmbedBlockedVideo(state.videoId);
         playerError = { code: event.data, ...playerErrorMessage(event.data) };
         render();
         if (!skipUnplayableTrack()) showToast(playerError.title);
@@ -873,16 +908,47 @@ ui.create.addEventListener('click', async () => {
   finally { ui.create.disabled = false; }
 });
 
+function roomFromInvite(raw) {
+  const value = raw.trim();
+  const code = value.match(/^#?([a-f0-9]{8})$/i)?.[1];
+  if (code) return new URL(`/?room=${code.toLowerCase()}`, location.origin);
+  try {
+    const link = new URL(value);
+    const id = link.searchParams.get('room');
+    if (!['http:', 'https:'].includes(link.protocol) || !['/', '/index.html'].includes(link.pathname) || !/^[a-f0-9]{8}$/i.test(id || '')) return null;
+    return new URL(`/?room=${id.toLowerCase()}`, link.origin);
+  } catch { return null; }
+}
+
+ui.joinForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const destination = roomFromInvite(ui.joinInput.value);
+  if (!destination) { showToast('올바른 초대 링크나 8자리 방 코드를 입력해 주세요.'); return; }
+  ui.joinButton.disabled = true;
+  try {
+    if (destination.origin === location.origin) await enterRoom(destination.searchParams.get('room'));
+    else {
+      try { await api('/api/local/recent-rooms', { method: 'POST', body: JSON.stringify({ url: destination.href }) }); }
+      catch { /* The destination still opens when local history is unavailable. */ }
+      location.assign(destination.href);
+    }
+  } finally { ui.joinButton.disabled = false; }
+});
+
 ui.leave.addEventListener('click', leaveRoom);
 ui.brand.addEventListener('click', (event) => { event.preventDefault(); leaveRoom(); });
 ui.recentRoomList.addEventListener('click', (event) => {
-  const button = event.target.closest('button[data-room-id]');
+  const button = event.target.closest('button[data-room-url]');
   if (!button) return;
   const id = button.dataset.roomId;
+  const url = button.dataset.roomUrl;
   if (button.dataset.action === 'forget') {
-    recentRooms = recentRooms.filter((item) => item.id !== id);
+    recentRooms = recentRooms.filter((item) => item.url !== url);
+    serverRecentRooms = serverRecentRooms.filter((item) => item.url !== url);
     saveRecentRooms();
-  } else enterRoom(id);
+    api('/api/local/recent-rooms', { method: 'DELETE', body: JSON.stringify({ url }) }).catch(() => {});
+  } else if (new URL(url).origin === location.origin) enterRoom(id);
+  else location.assign(url);
 });
 ui.role.addEventListener('click', async () => {
   if (!state) return;
@@ -940,6 +1006,72 @@ ui.copy.addEventListener('click', async () => {
   }
 });
 
+function closeSuggestions() {
+  clearTimeout(suggestionTimer);
+  suggestionRequestId++;
+  suggestions = [];
+  activeSuggestion = -1;
+  ui.searchSuggestions.replaceChildren();
+  ui.searchSuggestions.classList.add('hidden');
+  ui.searchQuery.setAttribute('aria-expanded', 'false');
+  ui.searchQuery.removeAttribute('aria-activedescendant');
+}
+
+function renderSuggestions() {
+  ui.searchSuggestions.replaceChildren();
+  suggestions.forEach((value, index) => {
+    const option = document.createElement('li');
+    option.id = `search-suggestion-${index}`;
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-selected', String(index === activeSuggestion));
+    option.textContent = value;
+    option.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      ui.searchQuery.value = value;
+      closeSuggestions();
+      ui.searchQuery.focus();
+      ui.searchForm.requestSubmit();
+    });
+    ui.searchSuggestions.append(option);
+  });
+  ui.searchSuggestions.classList.toggle('hidden', !suggestions.length);
+  ui.searchQuery.setAttribute('aria-expanded', String(Boolean(suggestions.length)));
+  if (activeSuggestion >= 0) ui.searchQuery.setAttribute('aria-activedescendant', `search-suggestion-${activeSuggestion}`);
+  else ui.searchQuery.removeAttribute('aria-activedescendant');
+}
+
+function scheduleSuggestions() {
+  closeSuggestions();
+  const query = ui.searchQuery.value.trim();
+  if (!query || composingSearch) return;
+  const requestId = suggestionRequestId;
+  suggestionTimer = setTimeout(async () => {
+    try {
+      const result = await api(`/api/search/suggestions?q=${encodeURIComponent(query)}`);
+      if (requestId !== suggestionRequestId || !ui.searchDialog.open || ui.searchQuery.value.trim() !== query) return;
+      suggestions = result.suggestions;
+      renderSuggestions();
+    } catch { /* Search remains available when suggestions are unavailable. */ }
+  }, 250);
+}
+ui.searchQuery.addEventListener('compositionstart', () => { composingSearch = true; closeSuggestions(); });
+ui.searchQuery.addEventListener('compositionend', () => { composingSearch = false; scheduleSuggestions(); });
+ui.searchQuery.addEventListener('input', () => { if (!composingSearch) scheduleSuggestions(); });
+ui.searchQuery.addEventListener('blur', closeSuggestions);
+ui.searchQuery.addEventListener('keydown', (event) => {
+  if (event.isComposing || composingSearch || !suggestions.length) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    activeSuggestion = event.key === 'ArrowDown'
+      ? (activeSuggestion + 1) % suggestions.length
+      : (activeSuggestion <= 0 ? suggestions.length - 1 : activeSuggestion - 1);
+    renderSuggestions();
+  } else if (event.key === 'Enter' && activeSuggestion >= 0) {
+    ui.searchQuery.value = suggestions[activeSuggestion];
+    closeSuggestions();
+  }
+});
+
 ui.openSearch.addEventListener('click', () => {
   ui.searchDialog.showModal();
   document.body.classList.add('search-dialog-open');
@@ -949,6 +1081,7 @@ ui.openSearch.addEventListener('click', () => {
 ui.closeSearch.addEventListener('click', () => ui.searchDialog.close());
 ui.searchDialog.addEventListener('close', () => {
   document.body.classList.remove('search-dialog-open');
+  closeSuggestions();
   searchRequestId++;
   activeSearchProbeCancel?.();
   searchLoading = false;
@@ -958,8 +1091,10 @@ ui.searchDialog.addEventListener('close', () => {
 });
 ui.searchDialog.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
+    if (event.isComposing || composingSearch) return;
     event.preventDefault();
-    ui.searchDialog.close();
+    if (suggestions.length) closeSuggestions();
+    else ui.searchDialog.close();
   } else if (event.target !== ui.searchQuery && event.key === 'ArrowLeft') {
     event.preventDefault();
     if (!ui.searchPrevious.disabled) ui.searchPrevious.click();
@@ -977,6 +1112,7 @@ ui.searchDialog.addEventListener('click', (event) => {
 ui.searchForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const query = ui.searchQuery.value.trim();
+  closeSuggestions();
   if (query.length < 2) return showToast('검색어를 2자 이상 입력해 주세요.');
   if (!precheckEnabled) return showToast('YouTube 검색에는 로컬 API 키가 필요해요.');
   resetSearchResults();
@@ -993,7 +1129,7 @@ ui.searchForm.addEventListener('submit', async (event) => {
       method: 'POST', body: JSON.stringify({ query }),
     });
     if (requestId !== searchRequestId) return;
-    searchItems = result.items.filter((item) => !isBlockedSearchVideo(item.videoId));
+    searchItems = result.items;
     searchNextPageToken = result.nextPageToken || null;
     renderSearchPage();
   } catch (error) {
@@ -1038,7 +1174,7 @@ ui.searchNext.addEventListener('click', async () => {
     });
     if (requestId !== searchRequestId) return;
     const seenIds = new Set(searchItems.map((item) => item.videoId));
-    searchItems.push(...result.items.filter((item) => !seenIds.has(item.videoId) && !isBlockedSearchVideo(item.videoId)));
+    searchItems.push(...result.items.filter((item) => !seenIds.has(item.videoId)));
     searchNextPageToken = result.nextPageToken && result.nextPageToken !== pageToken ? result.nextPageToken : null;
     if (targetStart < searchItems.length) searchPage = Math.floor(targetStart / searchPageSize);
     renderSearchPage();
@@ -1064,7 +1200,6 @@ async function addVideo(videoId, title, button, playNext = false) {
   try {
     const probe = await probeEmbeddedPlayback(videoId);
     if (!probe.allowed) {
-      if ([100, 101, 150].includes(probe.errorCode)) rememberEmbedBlockedVideo(videoId);
       return showToast(probe.reason);
     }
     button.textContent = precheckEnabled ? 'YouTube 정보 확인 중…' : '곡 추가 중…';
@@ -1127,6 +1262,7 @@ ui.playlistSearchNext.addEventListener('click', () => jumpToPlaylistMatch(1));
 function updateBackToPlayerVisibility() {
   const playerAboveViewport = ui.playerPanel.getBoundingClientRect().bottom <= 0;
   ui.backToPlayer.classList.toggle('hidden', ui.room.classList.contains('hidden') || !playerAboveViewport);
+  schedulePlaylistBottomButton();
 }
 window.addEventListener('scroll', updateBackToPlayerVisibility, { passive: true });
 window.addEventListener('resize', updateBackToPlayerVisibility);
@@ -1163,11 +1299,15 @@ function updatePlaylistDropTarget(clientY) {
 function scrollPlaylistWhileDragging() {
   const drag = playlistDrag;
   if (!drag?.moved) return;
+  const list = ui.playlistList;
+  const listScrolls = getComputedStyle(list).overflowY === 'auto';
+  const bounds = listScrolls ? list.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
   const edge = 65;
-  const speed = drag.lastY < edge ? -Math.ceil((edge - drag.lastY) / 6)
-    : drag.lastY > window.innerHeight - edge ? Math.ceil((drag.lastY - window.innerHeight + edge) / 6) : 0;
+  const speed = drag.lastY < bounds.top + edge ? -Math.ceil((bounds.top + edge - drag.lastY) / 6)
+    : drag.lastY > bounds.bottom - edge ? Math.ceil((drag.lastY - bounds.bottom + edge) / 6) : 0;
   if (speed) {
-    window.scrollBy(0, speed);
+    if (listScrolls) list.scrollBy(0, speed);
+    else window.scrollBy(0, speed);
     updatePlaylistDropTarget(drag.lastY);
   }
   drag.frame = requestAnimationFrame(scrollPlaylistWhileDragging);
@@ -1307,5 +1447,6 @@ setInterval(() => {
 
 const initialRoom = new URLSearchParams(location.search).get('room');
 renderRecentRooms();
+refreshServerRecentRooms();
 if (initialRoom && /^[a-f0-9]{8}$/.test(initialRoom)) enterRoom(initialRoom);
 else if (initialRoom) showToast('올바른 초대 링크가 아니에요.');

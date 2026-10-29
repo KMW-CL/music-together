@@ -56,6 +56,13 @@ a:hover { color: var(--primary); text-decoration: underline; text-underline-offs
 .primary-button:hover:not(:disabled) { background: var(--primary-hover); transform: scale(1.04); }
 .primary-button:active:not(:disabled) { background: var(--primary-active); transform: scale(1); }
 .create-button { min-width: 240px; }
+.join-room-form { max-width: 520px; margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border); }
+.join-room-form label { display: block; margin-bottom: 8px; color: var(--text); font-size: 14px; font-weight: 700; }
+.join-room-row { display: flex; align-items: stretch; gap: 8px; }
+.join-room-row input { flex: 1; min-width: 0; min-height: 48px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 4px; background: var(--elevated); color: var(--text); font-size: 14px; }
+.join-room-row input::placeholder { color: var(--muted); }
+.join-room-row .outline-button { flex: none; min-height: 48px; }
+.join-room-form p { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
 .hero-art { background: radial-gradient(circle, var(--elevated), var(--background) 68%); }
 .landing.has-recent-rooms { min-height: 0; }
 .landing.has-recent-rooms .landing-copy { padding: 32px 0; }
@@ -222,6 +229,9 @@ a:hover { color: var(--primary); text-decoration: underline; text-underline-offs
 .playlist-find-status { min-height: 18px; margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .library-empty { color: var(--muted); border-color: var(--border); border-radius: 6px; font-size: 14px; }
 .track-list { gap: 8px; }
+.playlist-bottom-button { position: fixed; z-index: 5; display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid var(--border); border-radius: 9999px; background: var(--highlight); color: #1ed760; box-shadow: 0 4px 12px rgba(0,0,0,.4); cursor: pointer; }
+.playlist-bottom-button:hover { border-color: #1ed760; }
+.playlist-bottom-button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .playlist-item { gap: 12px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; background: var(--highlight); transition: background-color 200ms cubic-bezier(.4,0,.2,1), opacity 150ms, transform 200ms; }
 .playlist-item:hover { background: #333333; }
 .playlist-item.is-current { background: var(--highlight); border-color: var(--primary); }
@@ -303,6 +313,8 @@ footer span { color: var(--text); }
   .steps { gap: 24px; padding: 32px 0; }
   .recent-rooms-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
   .recent-room-list { grid-template-columns: 1fr; }
+  .join-room-row { flex-wrap: wrap; }
+  .join-room-row .outline-button { width: 100%; }
   .room { padding-top: 24px; }
   .room-heading { margin: 32px 0 24px; }
   .room-heading h1 { font-size: 32px; }
@@ -360,3 +372,12 @@ footer span { color: var(--text); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+.search-input-wrap { position: relative; flex: 1; min-width: 0; }
+.search-form-row .search-input-wrap input { width: 100%; }
+.search-suggestions { position: absolute; z-index: 4; top: calc(100% + 4px); left: 0; right: 0; max-height: min(352px, 45dvh); overflow-y: auto; margin: 0; padding: 4px; list-style: none; background: var(--elevated); border: 1px solid var(--border); border-radius: 4px; box-shadow: var(--overlay-shadow); }
+.search-suggestions.hidden { display: none; }
+.search-suggestions li { min-height: 44px; display: flex; align-items: center; padding: 8px 12px; color: var(--text); font-size: 14px; border-radius: 2px; cursor: pointer; overflow-wrap: anywhere; }
+.search-suggestions li:hover, .search-suggestions li[aria-selected="true"] { background: var(--highlight); }
+
+.search-dialog:has(.search-suggestions:not(.hidden)) { overflow: visible; }

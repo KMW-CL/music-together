@@ -12,12 +12,76 @@ const defaultStoragePath = path.join(root, 'data', 'rooms.json');
 const localApiKeyPath = path.join(root, 'data', 'youtube-api-key.txt');
 const MAX_BODY_BYTES = 8_192;
 const MAX_PLAYLIST_LENGTH = 500;
+const MAX_RECENT_ROOMS = 32;
 
 class VideoCheckError extends Error {}
 
 function json(response, status, data) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   response.end(JSON.stringify(data));
+}
+
+function isLocalRequest(request) {
+  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress);
+}
+
+function canonicalRoomUrl(value, base) {
+  try {
+    const url = new URL(value, base);
+    const id = url.searchParams.get('room');
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password
+      || !['/', '/index.html'].includes(url.pathname) || !/^[a-f0-9]{8}$/i.test(id || '')) return null;
+    return `${url.origin}/?room=${id.toLowerCase()}`;
+  } catch { return null; }
+}
+
+function createRecentRoomStore(storagePath) {
+  const historyPath = storagePath ? path.join(path.dirname(storagePath), 'recent-rooms.json') : null;
+  let records = { entries: [], hidden: [] };
+  if (historyPath) {
+    try { records = JSON.parse(readFileSync(historyPath, 'utf8')); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  if (!records || typeof records !== 'object') records = { entries: [], hidden: [] };
+  const entries = Array.isArray(records.entries) ? records.entries.filter((item) =>
+    item && canonicalRoomUrl(item.url) && Number.isSafeInteger(item.visitedAt) && item.visitedAt > 0).slice(0, MAX_RECENT_ROOMS) : [];
+  const hidden = new Set(Array.isArray(records.hidden) ? records.hidden.filter((url) => canonicalRoomUrl(url)) : []);
+  let writes = Promise.resolve();
+  const save = () => {
+    if (!historyPath) return Promise.resolve();
+    const contents = JSON.stringify({ entries, hidden: [...hidden] }, null, 2);
+    writes = writes.catch(() => {}).then(async () => {
+      await mkdir(path.dirname(historyPath), { recursive: true });
+      const temporaryPath = `${historyPath}.tmp`;
+      await writeFile(temporaryPath, contents);
+      await rename(temporaryPath, historyPath);
+    });
+    return writes;
+  };
+  return {
+    list(origin, rooms) {
+      const saved = [...rooms.values()].map((room) => ({
+        id: room.id, url: `${origin}/?room=${room.id}`, visitedAt: room.updatedAt,
+        playlistCount: room.playlist.length,
+      }));
+      const combined = [...entries, ...saved].filter((item) => !hidden.has(item.url));
+      const seen = new Set();
+      return combined.sort((a, b) => b.visitedAt - a.visitedAt)
+        .filter((item) => !seen.has(item.url) && seen.add(item.url)).slice(0, MAX_RECENT_ROOMS);
+    },
+    async remember(url) {
+      hidden.delete(url);
+      const id = new URL(url).searchParams.get('room');
+      entries.splice(0, entries.length, { id, url, visitedAt: Date.now() }, ...entries.filter((item) => item.url !== url).slice(0, MAX_RECENT_ROOMS - 1));
+      await save();
+    },
+    async forget(url) {
+      hidden.add(url);
+      const index = entries.findIndex((item) => item.url === url);
+      if (index >= 0) entries.splice(index, 1);
+      await save();
+    },
+  };
 }
 
 function currentPosition(room, now = Date.now()) {
@@ -152,7 +216,7 @@ function durationSeconds(value) {
   return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : null;
 }
 
-async function searchPlayableVideos(items, apiKey, fetchVideo) {
+async function addSearchDurations(items, apiKey, fetchVideo) {
   if (!items.length) return [];
   const url = new URL('https://www.googleapis.com/youtube/v3/videos');
   url.searchParams.set('part', 'status,contentDetails');
@@ -170,8 +234,8 @@ async function searchPlayableVideos(items, apiKey, fetchVideo) {
   catch { throw new VideoCheckError('검색 결과의 재생 가능 여부를 읽지 못했어요.'); }
   if (!Array.isArray(data.items)) throw new VideoCheckError('검색 결과의 재생 가능 여부가 올바르지 않아요.');
   const videos = new Map(data.items.filter((video) => typeof video.id === 'string').map((video) => [video.id, video]));
-  return items.filter((item) => !videoPlaybackRestriction(videos.get(item.videoId))).map((item) => {
-    const seconds = durationSeconds(videos.get(item.videoId).contentDetails?.duration);
+  return items.map((item) => {
+    const seconds = durationSeconds(videos.get(item.videoId)?.contentDetails?.duration);
     return seconds === null ? item : { ...item, durationSeconds: seconds };
   });
 }
@@ -183,8 +247,6 @@ async function searchYouTubeVideos(query, pageToken, apiKey, fetchVideo) {
   url.searchParams.set('q', query);
   url.searchParams.set('type', 'video');
   url.searchParams.set('videoCategoryId', '10');
-  url.searchParams.set('videoEmbeddable', 'true');
-  url.searchParams.set('videoSyndicated', 'true');
   url.searchParams.set('maxResults', '25');
   url.searchParams.set('safeSearch', 'moderate');
   if (pageToken) url.searchParams.set('pageToken', pageToken);
@@ -213,7 +275,7 @@ async function searchYouTubeVideos(query, pageToken, apiKey, fetchVideo) {
     .map((item, index) => ({ item, index, score: musicResultScore(item, query) }))
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .map(({ item }) => item);
-  const items = await searchPlayableVideos(candidates, apiKey, fetchVideo);
+  const items = await addSearchDurations(candidates, apiKey, fetchVideo);
   return { items, nextPageToken: typeof data.nextPageToken === 'string' ? data.nextPageToken : null };
 }
 
@@ -645,6 +707,11 @@ async function serveFile(url, response) {
     '/design.css': ['design.css', 'text/css; charset=utf-8'],
     '/workspace.css': ['workspace.css', 'text/css; charset=utf-8'],
     '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
+    '/favicon.ico': ['favicon.ico', 'image/x-icon'],
+    '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json; charset=utf-8'],
+    '/icon-44.png': ['icon-44.png', 'image/png'],
+    '/icon-192.png': ['icon-192.png', 'image/png'],
+    '/icon-512.png': ['icon-512.png', 'image/png'],
     '/lyrics.js': ['lyrics.js', 'text/javascript; charset=utf-8'],
   };
   const entry = files[url.pathname];
@@ -686,8 +753,10 @@ function originalTitlesFromSuggestions(suggestions, artist, translatedTitle) {
 export function createAppServer({ storagePath = null, youtubeApiKey = null, fetchVideo = fetch, fetchSuggestions = fetch } = {}) {
   const rooms = loadRooms(storagePath);
   const save = createSaver(rooms, storagePath);
+  const recentRoomStore = createRecentRoomStore(storagePath);
   const searchCache = new Map();
   const lyricTitleCache = new Map();
+  const suggestionCache = new Map();
   const getApiKey = () => {
     if (youtubeApiKey !== null) return youtubeApiKey.trim();
     if (process.env.YOUTUBE_API_KEY) return process.env.YOUTUBE_API_KEY.trim();
@@ -708,6 +777,29 @@ export function createAppServer({ storagePath = null, youtubeApiKey = null, fetc
       const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
       if (request.method === 'GET' && url.pathname === '/api/config') {
         return json(response, 200, { precheckEnabled: Boolean(getApiKey()) });
+      }
+      if (request.method === 'GET' && url.pathname === '/api/search/suggestions') {
+        const query = (url.searchParams.get('q') || '').trim().replace(/\s+/g, ' ');
+        if (!query || query.length > 100) return json(response, 400, { error: '검색어를 1~100자로 입력해 주세요.' });
+        const key = query.toLocaleLowerCase();
+        const cached = suggestionCache.get(key);
+        if (cached && Date.now() - cached.at < 30 * 60_000) return json(response, 200, { suggestions: cached.suggestions });
+        try {
+          const params = new URLSearchParams({ client: 'firefox', ds: 'yt', q: query, hl: 'ko' });
+          const result = await fetchSuggestions(`https://suggestqueries.google.com/complete/search?${params}`, {
+            headers: { 'User-Agent': 'SudeemiMusic/0.1.0 (https://github.com/KMW-CL/music-together)' },
+            signal: AbortSignal.timeout(4_000),
+          });
+          if (!result.ok) throw new Error('Suggestion service unavailable');
+          const data = await result.json();
+          if (!Array.isArray(data?.[1])) throw new Error('Invalid suggestions');
+          const suggestions = [...new Set(data[1].filter((item) => typeof item === 'string' && item.trim() && item.length <= 100))].slice(0, 8);
+          if (suggestionCache.size >= 200) suggestionCache.delete(suggestionCache.keys().next().value);
+          suggestionCache.set(key, { at: Date.now(), suggestions });
+          return json(response, 200, { suggestions });
+        } catch {
+          return json(response, 200, { suggestions: [] });
+        }
       }
       if (request.method === 'GET' && url.pathname === '/api/lyrics/titles') {
         const artist = (url.searchParams.get('artist') || '').trim();
@@ -733,6 +825,21 @@ export function createAppServer({ storagePath = null, youtubeApiKey = null, fetc
         if (lyricTitleCache.size >= 200) lyricTitleCache.delete(lyricTitleCache.keys().next().value);
         lyricTitleCache.set(key, { at: Date.now(), titles });
         return json(response, 200, { titles });
+      }
+      if (request.method === 'GET' && url.pathname === '/api/health') {
+        return json(response, 200, { app: 'music-together' });
+      }
+      if (url.pathname === '/api/local/recent-rooms') {
+        if (!isLocalRequest(request)) return json(response, 403, { error: '이 컴퓨터에서만 확인할 수 있어요.' });
+        if (request.method === 'GET') return json(response, 200, { rooms: recentRoomStore.list(url.origin, rooms) });
+        if (request.method === 'POST' || request.method === 'DELETE') {
+          const body = await readJson(request);
+          const roomUrl = canonicalRoomUrl(body.url, url.origin);
+          if (!roomUrl) return json(response, 400, { error: '올바른 음악방 링크를 입력해 주세요.' });
+          if (request.method === 'POST') await recentRoomStore.remember(roomUrl);
+          else await recentRoomStore.forget(roomUrl);
+          return json(response, 200, { ok: true });
+        }
       }
       if (request.method === 'POST' && url.pathname === '/api/rooms') {
         const room = newRoom(rooms);

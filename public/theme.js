@@ -1,19 +1,23 @@
 const themeStorageKey = 'music-together-theme';
 const themeSelect = document.getElementById('themeSelect');
-const favicon = document.querySelector('link[rel="icon"]');
-const defaultFavicon = favicon?.href;
 const themeColor = document.querySelector('meta[name="theme-color"]');
 const brand = document.getElementById('brandLink');
-const workspaceFavicon = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="10" fill="#1e2128"/><path d="m25 18-14 14 14 14m14-28 14 14-14 14M35 14 29 50" fill="none" stroke="#75b8e7" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>')}`;
 
-window.getMusicPageTitle = () => document.documentElement.dataset.theme === 'workspace' ? 'workspace / editor' : '서디미 뮤직';
+let desktopWindow = false;
+try {
+  if (new URLSearchParams(location.search).get('desktop') === '1') sessionStorage.setItem('music-together-desktop', '1');
+  desktopWindow = sessionStorage.getItem('music-together-desktop') === '1';
+} catch { /* The app remains usable if storage is unavailable. */ }
+window.getMusicPageTitle = () => {
+  const title = document.documentElement.dataset.theme === 'workspace' ? 'workspace / editor · 서디미 뮤직' : '서디미 뮤직';
+  return desktopWindow ? `${title} [Music Together ${location.port || (location.protocol === 'https:' ? '443' : '80')}]` : title;
+};
 
 function applyTheme(theme, persist = true) {
   const selected = theme === 'workspace' ? 'workspace' : 'default';
   document.documentElement.dataset.theme = selected;
   themeSelect.value = selected;
   document.title = window.getMusicPageTitle();
-  if (favicon) favicon.href = selected === 'workspace' ? workspaceFavicon : defaultFavicon;
   if (themeColor) themeColor.content = selected === 'workspace' ? '#171a20' : '#121212';
   brand.setAttribute('aria-label', selected === 'workspace' ? '워크스페이스 홈' : 'music together 홈');
   if (persist) {
